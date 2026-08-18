@@ -384,9 +384,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSTableViewDat
         return item
     }
 
-    /// Installs the standard macOS preferences toolbar (one selectable item per
-    /// pane, as in System Settings and Safari's preferences). AppKit handles
-    /// SF Symbol shown beside each pane's name in the sidebar.
+    /// Returns the SF Symbol shown beside each pane's name in the sidebar.
     static func paneSymbolName(for title: String) -> String {
         switch title {
         case "General": return "gearshape"
