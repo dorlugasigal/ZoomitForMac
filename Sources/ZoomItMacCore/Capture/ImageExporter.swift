@@ -84,7 +84,7 @@ enum ImageExporter {
 
                 let url = directoryURL.appendingPathComponent(suggestedFilename())
                 let rep = NSBitmapImageRep(cgImage: image)
-                guard let png = rep.representation(using: .png, properties: [:]) else { return }
+                guard let png = rep.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
                 try png.write(to: url)
             }
             return true
