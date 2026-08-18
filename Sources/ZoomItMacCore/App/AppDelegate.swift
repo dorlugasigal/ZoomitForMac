@@ -27,9 +27,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsStore.save(migratedSettings)
         }
         let permissionService = SystemPermissionService()
+        let userSelectedResourceAccess = UserDefaultsUserSelectedResourceAccess()
         let displayManager = SystemDisplayManager()
         let captureService = ScreenCaptureKitCaptureService(displayManager: displayManager)
-        let overlayController = OverlayWindowController()
+        let overlayController = OverlayWindowController(userSelectedResourceAccess: userSelectedResourceAccess)
         let annotationController = AnnotationController()
         let viewportController = ZoomViewportController()
 
@@ -40,7 +41,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             captureService: captureService,
             overlayController: overlayController,
             annotationController: annotationController,
-            viewportController: viewportController
+            viewportController: viewportController,
+            userSelectedResourceAccess: userSelectedResourceAccess
         )
 
         let hotkeyService = HotkeyService(settingsStore: settingsStore) { command in
@@ -61,7 +63,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsStore: settingsStore,
             permissionService: permissionService,
             hotkeyService: hotkeyService,
-            modeCoordinator: modeCoordinator
+            modeCoordinator: modeCoordinator,
+            userSelectedResourceAccess: userSelectedResourceAccess
         )
 
         DistributedNotificationCenter.default().addObserver(
