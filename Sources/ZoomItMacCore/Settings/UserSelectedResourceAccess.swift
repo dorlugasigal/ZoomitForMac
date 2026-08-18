@@ -79,7 +79,7 @@ final class UserDefaultsUserSelectedResourceAccess: UserSelectedResourceAccess {
                 throw error
             } catch {
                 if DistributionChannel.isAppStore {
-                    throw UserSelectedResourceAccessError.invalidBookmark(resource)
+                    throw error
                 }
             }
         }
