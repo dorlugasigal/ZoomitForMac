@@ -51,6 +51,12 @@ final class ModeCoordinator {
         settingsStore: settingsStore,
         userSelectedResourceAccess: userSelectedResourceAccess
     )
+    /// Drives DemoMirror (Control+9 / Shift for a region / Option for a window).
+    private lazy var demoMirrorController = DemoMirrorController(
+        displayManager: displayManager,
+        permissionService: permissionService,
+        settingsStore: settingsStore
+    )
     /// Notified when recording starts/stops so the UI (menu-bar icon) can react.
     var onRecordingStateChanged: ((Bool) -> Void)?
     /// Invoked when live zoom starts/stops so global Control+Up/Down zoom
@@ -137,6 +143,8 @@ final class ModeCoordinator {
         #endif
         case .toggleBreakTimer:
             toggleBreakTimer()
+        case .toggleDemoMirror(let scope):
+            demoMirrorController.toggle(scope: scope)
         case .setTool(let tool):
             annotationController.currentTool = tool
         case .setColor(let color):

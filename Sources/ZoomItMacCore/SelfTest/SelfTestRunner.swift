@@ -60,6 +60,7 @@ public enum SelfTestRunner {
         try testSettingsWindowStaysOnTop()
         try testZoomAndLiveZoomAreSeparateTabs()
         try testDistributionSpecificSettingsTabs()
+        try testSettingsPaneSymbolsResolve()
         try testBlankScreenUsesControlKeys()
         try testTypeTabFontSampleUsesSelectedFont()
         try testMenuBarIconIsPaddedTemplate()
@@ -677,6 +678,19 @@ public enum SelfTestRunner {
         SettingsWindowController.configureAlwaysOnTop(window)
         try expect(window.level == .floating, "Expected settings window to float above other windows")
         try expect(window.hidesOnDeactivate == false, "Expected settings window not to hide when the app deactivates")
+    }
+
+    /// The Options dialog lists its panes in a sidebar, which needs a
+    /// resolvable SF Symbol per pane. A typo'd symbol name yields a nil image
+    /// and a silently blank icon, so check every pane.
+    private static func testSettingsPaneSymbolsResolve() throws {
+        for title in SettingsWindowController.settingsTabTitles {
+            let symbol = SettingsWindowController.paneSymbolName(for: title)
+            try expect(
+                NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil,
+                "Expected settings pane \"\(title)\" to have a resolvable SF Symbol, got \"\(symbol)\""
+            )
+        }
     }
 
     /// Windows keeps static-zoom and live-zoom settings on separate tabs (the

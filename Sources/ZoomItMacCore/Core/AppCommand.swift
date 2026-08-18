@@ -23,5 +23,14 @@ enum AppCommand: Equatable {
     case resetDemoType
     #endif
     case toggleBreakTimer
+    case toggleDemoMirror(scope: DemoMirrorScope)
     case exit
+}
+
+/// What DemoMirror mirrors onto the second monitor: the entire source screen,
+/// a user-selected region of it, or the window under the cursor.
+enum DemoMirrorScope: Equatable {
+    case screen
+    case region
+    case window
 }

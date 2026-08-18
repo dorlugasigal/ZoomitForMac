@@ -56,6 +56,10 @@ final class AppController: NSObject {
         modeCoordinator.handle(.startPanorama(save: false))
     }
 
+    @objc func toggleDemoMirror() {
+        modeCoordinator.handle(.toggleDemoMirror(scope: .screen))
+    }
+
     @objc func toggleBreakTimer() {
         modeCoordinator.handle(.toggleBreakTimer)
     }
