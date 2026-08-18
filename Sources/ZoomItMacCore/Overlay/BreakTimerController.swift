@@ -126,6 +126,7 @@ final class BreakTimerController {
             frame: CGRect(origin: .zero, size: display.frame.size),
             settings: settings,
             backgroundImage: backgroundImage,
+            userSelectedResourceAccess: userSelectedResourceAccess,
             onSettingsChanged: { [weak self] updated in
                 self?.persistRuntimeSettings(updated)
             },
@@ -213,6 +214,7 @@ final class BreakTimerController {
 private final class BreakTimerView: NSView {
     private var settings: AppSettings
     private let backgroundImage: NSImage?
+    private let userSelectedResourceAccess: UserSelectedResourceAccess
     private let onSettingsChanged: (AppSettings) -> Void
     private let onClose: () -> Void
     private var timer: Timer?
@@ -226,11 +228,13 @@ private final class BreakTimerView: NSView {
         frame frameRect: NSRect,
         settings: AppSettings,
         backgroundImage: NSImage?,
+        userSelectedResourceAccess: UserSelectedResourceAccess,
         onSettingsChanged: @escaping (AppSettings) -> Void,
         onClose: @escaping () -> Void
     ) {
         self.settings = settings
         self.backgroundImage = backgroundImage
+        self.userSelectedResourceAccess = userSelectedResourceAccess
         self.onSettingsChanged = onSettingsChanged
         self.onClose = onClose
         self.remainingSeconds = max(1, min(settings.breakDurationMinutes, 99)) * 60
