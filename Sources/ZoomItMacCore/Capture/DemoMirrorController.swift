@@ -462,9 +462,11 @@ final class DemoMirrorController {
     private func startTrackingTimer(source: DisplayDescriptor) {
         trackingTimer?.invalidate()
         trackingTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
-                await self.refreshTrackedWindow(source: source)
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                Task { @MainActor in
+                    await self.refreshTrackedWindow(source: source)
+                }
             }
         }
     }
