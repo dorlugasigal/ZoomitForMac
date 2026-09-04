@@ -741,35 +741,66 @@ final class RecordingController {
 
     /// Toggles recording. When starting, `region` chooses whole-screen vs. a
     /// dragged region. `onStateChange(true/false)` reports start/stop.
-    func toggle(region: Bool, onStateChange: @escaping (Bool) -> Void) {
+    func toggle(
+        region: Bool,
+        shouldPresentRegionSelection: @escaping @MainActor () -> Bool,
+        onRegionSelectionFinished: @escaping () -> Void,
+        onStateChange: @escaping (Bool) -> Void
+    ) {
         if isStoppingRecording || isFinalizingRecording || isStartingRecording || clipEditor != nil {
             NSSound.beep()
         } else if isRecording {
             stop()
         } else {
             self.onStateChange = onStateChange
-            start(region: region)
+            start(
+                region: region,
+                shouldPresentRegionSelection: shouldPresentRegionSelection,
+                onRegionSelectionFinished: onRegionSelectionFinished
+            )
         }
+    }
+
+    var canStartRecording: Bool {
+        !isRecording
+            && !isStartingRecording
+            && !isStoppingRecording
+            && !isFinalizingRecording
+            && clipEditor == nil
     }
 
     var webcamWindowNumberForScreenCaptureExclusion: Int? {
         webcam.windowNumber
     }
 
-    private func start(region: Bool) {
+    private func start(
+        region: Bool,
+        shouldPresentRegionSelection: @escaping @MainActor () -> Bool,
+        onRegionSelectionFinished: @escaping () -> Void
+    ) {
         guard ScreenRecordingPrompt.ensureGranted(permissionService) else {
+            if region {
+                onRegionSelectionFinished()
+            }
             return
         }
         guard let display = displayManager.activeDisplay() else {
             NSSound.beep()
+            if region {
+                onRegionSelectionFinished()
+            }
             return
         }
 
         isStartingRecording = true
 
         if region {
-            selectRegion(on: display) { [weak self] rect in
+            selectRegion(
+                on: display,
+                shouldPresent: shouldPresentRegionSelection
+            ) { [weak self] rect in
                 guard let self else { return }
+                onRegionSelectionFinished()
                 guard let rect else {
                     self.isStartingRecording = false
                     return
@@ -1186,10 +1217,18 @@ final class RecordingController {
         }
     }
 
-    private func selectRegion(on display: DisplayDescriptor, completion: @escaping (CGRect?) -> Void) {
+    private func selectRegion(
+        on display: DisplayDescriptor,
+        shouldPresent: @escaping @MainActor () -> Bool,
+        completion: @escaping (CGRect?) -> Void
+    ) {
         Task { @MainActor in
             do {
                 let frame = try await captureService.captureDisplay(display)
+                guard shouldPresent() else {
+                    completion(nil)
+                    return
+                }
                 let window = SnipWindow(
                     contentRect: frame.display.frame,
                     styleMask: [.borderless],

@@ -10,6 +10,12 @@ final class OverlayWindowController {
     private let userSelectedResourceAccess: UserSelectedResourceAccess
     private var window: NSWindow?
     private weak var canvasView: ZoomCanvasView?
+    private weak var annotationController: AnnotationController?
+    private var drawingToolbarController: DrawingToolbarController?
+    private var isDrawingAccessoryActive = false
+    private var drawingSurfaceInteractionState = DrawingAccessoryInteractionState()
+    private var drawingAccessorySuppressions = DrawingAccessorySuppressionLifecycle()
+    private var canvasModalSuppression: DrawingAccessorySuppressionToken?
     private var viewportController: ZoomViewportController?
     private var zoomTimer: Timer?
     private var zoomAnimationCompletion: (() -> Void)?
@@ -30,6 +36,8 @@ final class OverlayWindowController {
         annotationController: AnnotationController,
         smoothImage: Bool,
         excludeFromScreenCapture: Bool = false,
+        drawingToolbarNormalizedPosition: CGPoint?,
+        drawingToolbarPlacementDidChange: @escaping (CGPoint) -> Void,
         commandSink: @escaping (AppCommand) -> Void
     ) {
         close()
@@ -65,7 +73,16 @@ final class OverlayWindowController {
             annotationController: annotationController,
             smoothImage: smoothImage,
             userSelectedResourceAccess: userSelectedResourceAccess,
-            commandSink: commandSink
+            commandSink: commandSink,
+            drawingModeDidChange: { [weak self] isDrawing in
+                self?.setDrawingModeActive(isDrawing)
+            },
+            transientToolDidChange: { [weak self] tool in
+                self?.drawingToolbarController?.setTransientTool(tool)
+            },
+            modalPresentationDidChange: { [weak self] isPresenting in
+                self?.setToolbarSuppressed(isPresenting)
+            }
         )
         window.contentView = canvasView
         window.makeKeyAndOrderFront(nil)
@@ -75,8 +92,38 @@ final class OverlayWindowController {
         NSApp.activate(ignoringOtherApps: true)
         window.makeFirstResponder(canvasView)
         self.canvasView = canvasView
+        self.annotationController = annotationController
         self.window = window
         self.viewportController = viewportController
+
+        drawingToolbarController = DrawingToolbarController(
+            parentWindow: window,
+            annotationController: annotationController,
+            toolbarNormalizedPosition: drawingToolbarNormalizedPosition,
+            commandSink: commandSink,
+            restoreCanvasFocus: { [weak self] in
+                guard let self,
+                      let window = self.window,
+                      let canvasView = self.canvasView else {
+                    return
+                }
+                window.makeFirstResponder(canvasView)
+                canvasView.restoreFocusAfterDrawingAccessoryAction()
+            },
+            toolbarPlacementDidChange: drawingToolbarPlacementDidChange,
+            pointerInteractionChanged: { [weak self, weak canvasView] interactionState in
+                self?.setDrawingSurfaceInteractionState(interactionState)
+                canvasView?.setDrawingAccessoryInteractionActive(interactionState.isActive)
+            }
+        )
+        annotationController.onStateChanged = { [weak self, weak annotationController] in
+            guard let self, let annotationController else { return }
+            self.canvasView?.annotationStateDidChange()
+            self.drawingToolbarController?.updateState(
+                DrawingToolbarState(annotationController: annotationController)
+            )
+            self.requestRedraw()
+        }
     }
 
     /// Drives the viewport's telescope zoom animation, redrawing each step, and
@@ -123,6 +170,10 @@ final class OverlayWindowController {
         requestRedraw()
     }
 
+    func typingInsertionPointForCurrentPointer() -> CGPoint? {
+        canvasView?.typingInsertionPointForCurrentPointer()
+    }
+
     /// Pushes a freshly captured live frame to the canvas during live zoom.
     func updateLiveImage(_ image: CGImage) {
         canvasView?.updateLiveImage(image)
@@ -140,11 +191,54 @@ final class OverlayWindowController {
             onFinished()
             return
         }
-        canvasView.beginRegionSnip(action: action, onFinished: onFinished)
+        let suppression = suppressDrawingAccessories()
+        canvasView.beginRegionSnip(action: action) { [weak self] in
+            self?.finishDrawingAccessorySuppression(
+                suppression,
+                restoreIfOverlayActive: true
+            )
+            onFinished()
+        }
     }
     /// The overlay's window number, used to exclude it from live screen capture
     /// so the magnified overlay is never captured back into itself.
     var overlayWindowNumber: Int? { window?.windowNumber }
+
+    var isOverlayPresented: Bool {
+        window != nil
+    }
+
+    var drawingAccessoryWindowNumbers: [Int] {
+        drawingToolbarController?.windowNumbers ?? []
+    }
+
+    var canvasViewForTesting: ZoomCanvasView? {
+        canvasView
+    }
+
+    var drawingToolbarIsVisibleForTesting: Bool {
+        drawingToolbarController?.toolbarIsVisibleForTesting == true
+    }
+
+    var drawingInspectorIsVisibleForTesting: Bool {
+        drawingToolbarController?.inspectorIsVisibleForTesting == true
+    }
+
+    func suppressDrawingAccessories() -> DrawingAccessorySuppressionToken {
+        let token = drawingAccessorySuppressions.begin()
+        updateDrawingToolbarVisibility()
+        return token
+    }
+
+    func finishDrawingAccessorySuppression(
+        _ token: DrawingAccessorySuppressionToken,
+        restoreIfOverlayActive: Bool
+    ) {
+        guard drawingAccessorySuppressions.finish(token) else { return }
+        if restoreIfOverlayActive && window != nil {
+            updateDrawingToolbarVisibility()
+        }
+    }
 
     /// Renders the overlay exactly as ZoomIt shows it so the recorder can encode
     /// zoom/drawing even when ScreenCaptureKit omits our own windows.
@@ -156,8 +250,13 @@ final class OverlayWindowController {
         canvasView?.needsDisplay = true
     }
 
+    func annotationContentOffset(forDestinationOffset offset: CGPoint) -> CGPoint {
+        canvasView?.annotationContentOffset(forDestinationOffset: offset) ?? offset
+    }
+
     func prepareForPresentedWindow() {
         guard let window else { return }
+        setToolbarSuppressed(true)
         canvasView?.prepareForClose()
         window.level = NSWindow.Level(rawValue: NSWindow.Level.normal.rawValue - 1)
     }
@@ -169,9 +268,17 @@ final class OverlayWindowController {
 
         guard let window else { return }
 
+        isDrawingAccessoryActive = false
+        drawingSurfaceInteractionState = DrawingAccessoryInteractionState()
+        canvasModalSuppression = nil
+        drawingAccessorySuppressions.reset()
+        drawingToolbarController?.close()
+        drawingToolbarController = nil
         canvasView?.prepareForClose()
+        annotationController?.onStateChanged = nil
         window.orderOut(nil)
         canvasView = nil
+        annotationController = nil
         viewportController = nil
         self.window = nil
 
@@ -179,6 +286,47 @@ final class OverlayWindowController {
         // deallocated while still unwinding the key event that triggered exit.
         DispatchQueue.main.async {
             window.close()
+        }
+    }
+
+    private func setDrawingModeActive(_ isActive: Bool) {
+        isDrawingAccessoryActive = isActive
+        if !isActive {
+            drawingToolbarController?.hide()
+        }
+        updateDrawingToolbarVisibility()
+    }
+
+    private func setToolbarSuppressed(_ isSuppressed: Bool) {
+        if isSuppressed {
+            guard canvasModalSuppression == nil else { return }
+            canvasModalSuppression = suppressDrawingAccessories()
+        } else if let suppression = canvasModalSuppression {
+            canvasModalSuppression = nil
+            finishDrawingAccessorySuppression(
+                suppression,
+                restoreIfOverlayActive: true
+            )
+        }
+    }
+
+    private func setDrawingSurfaceInteractionState(
+        _ interactionState: DrawingAccessoryInteractionState
+    ) {
+        drawingSurfaceInteractionState = interactionState
+        updateDrawingToolbarVisibility()
+    }
+
+    private func updateDrawingToolbarVisibility() {
+        let shouldShow = DrawingToolbarLifecycle.shouldShow(
+            isOverlayPresented: window != nil && !drawingAccessorySuppressions.isSuppressed,
+            isDrawingAccessoryActive: isDrawingAccessoryActive,
+            interactionState: drawingSurfaceInteractionState
+        )
+        if shouldShow {
+            drawingToolbarController?.show()
+        } else {
+            drawingToolbarController?.hide()
         }
     }
 }

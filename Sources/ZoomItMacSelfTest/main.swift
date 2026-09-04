@@ -141,7 +141,7 @@ if args.count >= 2, args[1] == "--bench-stitch" {
 
 Task { @MainActor in
     do {
-        try SelfTestRunner.run()
+        try await SelfTestRunner.run()
         print("ZoomItMacSelfTest: PASS")
         Foundation.exit(EXIT_SUCCESS)
     } catch {
