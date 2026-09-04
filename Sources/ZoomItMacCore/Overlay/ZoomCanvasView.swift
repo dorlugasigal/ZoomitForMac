@@ -984,6 +984,7 @@ final class ZoomCanvasView: NSView {
         }
         if let command = DrawingToolShortcuts.numericCommand(
             characters: event.charactersIgnoringModifiers ?? event.characters,
+            keyCode: event.keyCode,
             modifierFlags: event.modifierFlags,
             isDrawingMode: isDrawingMode,
             isTyping: interactionMode == .typing

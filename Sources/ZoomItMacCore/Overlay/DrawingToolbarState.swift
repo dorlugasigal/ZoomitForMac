@@ -54,15 +54,16 @@ enum DrawingToolShortcuts {
 
     static func numericCommand(
         characters: String?,
+        keyCode: UInt16,
         modifierFlags: NSEvent.ModifierFlags,
         isDrawingMode: Bool,
         isTyping: Bool
     ) -> AppCommand? {
-        let excludedModifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+        let excludedModifiers: NSEvent.ModifierFlags = [.command, .control, .option]
         guard isDrawingMode,
               !isTyping,
               modifierFlags.intersection(excludedModifiers).isEmpty,
-              let character = characters?.first else {
+              let character = numberRowCharacter(for: keyCode) ?? characters?.first else {
             return nil
         }
 
@@ -79,6 +80,22 @@ enum DrawingToolShortcuts {
         default: nil
         }
         return tool.map { .setTool($0) }
+    }
+
+    private static func numberRowCharacter(for keyCode: UInt16) -> Character? {
+        switch keyCode {
+        case 18: "1"
+        case 19: "2"
+        case 20: "3"
+        case 21: "4"
+        case 23: "5"
+        case 22: "6"
+        case 26: "7"
+        case 28: "8"
+        case 25: "9"
+        case 29: "0"
+        default: nil
+        }
     }
 
     static func legacyCommand(characters: String?, shift: Bool) -> AppCommand? {

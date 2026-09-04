@@ -8228,21 +8228,22 @@ public enum SelfTestRunner {
                     == [.keepActive, .hand, .mainTools, .overflow],
             "Expected larger toolbar tiles and legible Excalidraw-style numeric hints"
         )
-        let expectedNumericTools: [(String, AnnotationTool)] = [
-            ("1", .select),
-            ("2", .rectangle),
-            ("3", .diamond),
-            ("4", .ellipse),
-            ("5", .arrow),
-            ("6", .line),
-            ("7", .pen),
-            ("8", .text),
-            ("0", .eraser)
+        let expectedNumericTools: [(String, UInt16, AnnotationTool)] = [
+            ("1", 18, .select),
+            ("2", 19, .rectangle),
+            ("3", 20, .diamond),
+            ("4", 21, .ellipse),
+            ("5", 23, .arrow),
+            ("6", 22, .line),
+            ("7", 26, .pen),
+            ("8", 28, .text),
+            ("0", 29, .eraser)
         ]
-        for (key, tool) in expectedNumericTools {
+        for (key, keyCode, tool) in expectedNumericTools {
             try expect(
                 DrawingToolShortcuts.numericCommand(
                     characters: key,
+                    keyCode: keyCode,
                     modifierFlags: [],
                     isDrawingMode: true,
                     isTyping: false
@@ -8253,6 +8254,7 @@ public enum SelfTestRunner {
         try expect(
             DrawingToolShortcuts.numericCommand(
                 characters: "9",
+                keyCode: 25,
                 modifierFlags: [],
                 isDrawingMode: true,
                 isTyping: false
@@ -8262,26 +8264,46 @@ public enum SelfTestRunner {
         try expect(
             DrawingToolShortcuts.numericCommand(
                 characters: "1",
+                keyCode: 83,
                 modifierFlags: [.numericPad],
                 isDrawingMode: true,
                 isTyping: false
             ) == .setTool(.select),
             "Expected numeric-pad characters to use the same numeric mapping"
         )
-        for modifier: NSEvent.ModifierFlags in [.command, .control, .option, .shift] {
+        for modifier: NSEvent.ModifierFlags in [.command, .control, .option] {
             try expect(
                 DrawingToolShortcuts.numericCommand(
                     characters: "2",
+                    keyCode: 19,
                     modifierFlags: modifier,
                     isDrawingMode: true,
                     isTyping: false
                 ) == nil,
-                "Expected modified number keys to preserve existing shortcuts and gestures"
+                "Expected Command, Control, and Option number keys to preserve existing shortcuts"
             )
         }
         try expect(
             DrawingToolShortcuts.numericCommand(
+                characters: "1",
+                keyCode: 18,
+                modifierFlags: [.shift],
+                isDrawingMode: true,
+                isTyping: false
+            ) == .setTool(.select)
+                && DrawingToolShortcuts.numericCommand(
+                    characters: "!",
+                    keyCode: 19,
+                    modifierFlags: [.shift],
+                    isDrawingMode: true,
+                    isTyping: false
+                ) == .setTool(.rectangle),
+            "Expected shifted physical number-row keys to resolve by ANSI keyCode"
+        )
+        try expect(
+            DrawingToolShortcuts.numericCommand(
                 characters: "8",
+                keyCode: 28,
                 modifierFlags: [],
                 isDrawingMode: true,
                 isTyping: true
@@ -8291,6 +8313,7 @@ public enum SelfTestRunner {
         try expect(
             DrawingToolShortcuts.numericCommand(
                 characters: "8",
+                keyCode: 28,
                 modifierFlags: [],
                 isDrawingMode: false,
                 isTyping: false
@@ -8333,7 +8356,7 @@ public enum SelfTestRunner {
         try expect(
             visibleNumericHints.count == expectedNumericTools.count
                 && expectedNumericTools.allSatisfy {
-                    DrawingToolShortcuts.metadata(for: $0.1)?.numericHint == $0.0
+                    DrawingToolShortcuts.metadata(for: $0.2)?.numericHint == $0.0
                 }
                 && !visibleNumericHints.contains("9"),
             "Expected toolbar numeric hints to match the supported tool mapping"
@@ -8715,6 +8738,67 @@ public enum SelfTestRunner {
                     && inspectorOrigin.y - toolbarOrigin.y == inspectorOffset.y
             },
             "Expected toolbar and inspector relative offsets to remain exactly invariant at every drag sample"
+        )
+
+        let portraitVisibleFrame = CGRect(
+            x: 1_440,
+            y: 0,
+            width: 430,
+            height: 800
+        )
+        let destinationMaximumWidth = portraitVisibleFrame.width
+            - DrawingToolbarLayout.screenMargin * 2
+        let destinationToolbarSize = DrawingToolbarLayout.preferredSize(
+            mainContentSize: CGSize(width: 720, height: 44),
+            pathActionsSize: CGSize(width: 63, height: 30),
+            maximumWidth: destinationMaximumWidth
+        )
+        let destinationToolbarOrigin = DrawingToolbarPlacement.clampedOrigin(
+            CGPoint(x: 1_700, y: 690),
+            panelSize: destinationToolbarSize,
+            visibleFrame: portraitVisibleFrame
+        )
+        let destinationToolbarFrame = CGRect(
+            origin: destinationToolbarOrigin,
+            size: destinationToolbarSize
+        )
+        let destinationToolbarFrames = DrawingToolbarLayout.frames(
+            in: CGRect(origin: .zero, size: destinationToolbarSize),
+            pathActionsSize: CGSize(width: 63, height: 30)
+        )
+        let destinationInspectorFrame = DrawingAttachedInspectorPlacement.frame(
+            toolbarFrame: destinationToolbarFrame,
+            contentSize: CGSize(width: 669, height: 66),
+            visibleFrame: portraitVisibleFrame
+        )
+        let persistedDestinationPosition = DrawingToolbarPlacement.normalizedPosition(
+            origin: destinationToolbarFrame.origin,
+            panelSize: destinationToolbarFrame.size,
+            visibleFrame: portraitVisibleFrame
+        )
+        let restoredDestinationOrigin = DrawingToolbarPlacement.origin(
+            normalizedPosition: persistedDestinationPosition,
+            panelSize: destinationToolbarFrame.size,
+            visibleFrame: portraitVisibleFrame
+        )
+        let inspectorRemainsAttached =
+            destinationInspectorFrame.maxY
+                == destinationToolbarFrame.minY - DrawingAttachedInspectorPlacement.gap
+            || destinationInspectorFrame.minY
+                == destinationToolbarFrame.maxY + DrawingAttachedInspectorPlacement.gap
+        try expect(
+            destinationToolbarSize.width == destinationMaximumWidth
+                && destinationToolbarSize.width < initialToolbarFrame.width
+                && destinationToolbarFrames.scrollFrame.width > 0
+                && destinationToolbarFrames.pathActionsFrame.maxX
+                    <= destinationToolbarSize.width
+                && portraitVisibleFrame.contains(destinationToolbarFrame)
+                && portraitVisibleFrame.contains(destinationInspectorFrame)
+                && inspectorRemainsAttached
+                && abs(restoredDestinationOrigin.x - destinationToolbarOrigin.x) < 0.001
+                && abs(restoredDestinationOrigin.y - destinationToolbarOrigin.y) < 0.001,
+            "Expected a cross-display drag to reflow toolbar controls and attached inspector "
+                + "before persisting on a narrower portrait display"
         )
         try expect(
             DrawingAccessoryEventDispatch.bracketsControlTracking(.leftMouseDown)

@@ -1273,7 +1273,6 @@ private final class DrawingContinuousColorWell: NSColorWell {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        updateAppearance()
         super.draw(dirtyRect)
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         context.clear(bounds)

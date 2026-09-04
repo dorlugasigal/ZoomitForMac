@@ -1,0 +1,41 @@
+## Chunks 13-24 Review
+
+### Files Changed
+
+- `Sources/ZoomItMacCore/Annotations/AnnotationEditor.swift` (added): Added the latter portion of the annotation interaction editor, including selection manipulation, linear point editing, endpoint binding, group-aware selection, and rotation-aware move and resize transforms.
+- `Sources/ZoomItMacCore/Annotations/AnnotationGeometry.swift` (added): Added shared geometry for bounds, transforms, shape and connector paths, adaptive curve approximation, freehand smoothing, pressure interpolation, arrowheads, shape bindings, selection decorations, and geometric distance calculations.
+- `Sources/ZoomItMacCore/Annotations/AnnotationHistory.swift` (added): Added bounded undo and redo stacks for annotation scene snapshots.
+- `Sources/ZoomItMacCore/Annotations/AnnotationHitTester.swift` (added): Added zoom-aware hit testing for selection handles, freehand strokes, shapes, text, connector shafts, arrowheads, and linear-edit controls.
+- `Sources/ZoomItMacCore/Annotations/AnnotationRenderer.swift` (added): Added rendering for annotations and editing affordances, with deterministic rough styling, highlighter compositing, active and committed freehand caches, patterned fills, connector construction previews, and text rendering.
+- `Sources/ZoomItMacCore/Annotations/AnnotationRoughStroke.swift` (added): Added the initial rough-stroke implementation, including seeded path perturbation, ellipse generation, and pressure-sensitive outline paths. The file continues beyond chunk 24.
+
+### Technical Details
+
+Chunks 13-15 completed the interaction logic in `AnnotationEditor.swift`. Pointer updates dispatched through explicit marquee, move, resize, rotate, and linear-edit states. Move, resize, and rotate operations used scene transactions so completed gestures committed one change and cancelled gestures restored prior state. Modifier keys controlled symmetric selection changes, duplicate-on-drag, center-based resizing, aspect-ratio constraints, rotation snapping, endpoint unbinding, axis-constrained point movement, and mirrored Bezier controls. Group membership expanded element selection, while locked elements were excluded from editing operations.
+
+Linear connector editing supported vertex, segment, and Bezier-control hits. Double-clicking a segment inserted a point, endpoint drags could preserve or replace shape bindings, and elbow routes were re-orthogonalized after edits. Duplicate operations remapped element IDs, group IDs, and connector bindings when the bound target was duplicated in the same selection. Rotation-aware resizing transformed geometry in local coordinates and applied an anchor correction so the opposite handle, or the selection center for center resizing, remained fixed.
+
+`AnnotationGeometry.swift` centralized local and world bounds, rotation pivots, shape construction, connector paths, selection decorations, and low-level geometry helpers. Curved connectors used generated or stored Bezier controls and an adaptive cubic subdivision algorithm with a maximum depth and per-curve segment limit. The approximation retained source segment indices and parameter ranges for nearest-location calculations and linear-edit insertion. Curved point insertion split the cubic with interpolated control points, while point removal retained adjacent controls where possible.
+
+Freehand geometry included smoothing that skipped sharp turns, interpolated pressure and timestamps, and capped pressure interpolation at 16 generated samples per source segment. Connector arrowheads covered open and filled arrows, triangles, circles, bars, diamonds, crow-foot forms, and compound cardinality forms. Shaft endpoints were inset to prevent overlap with filled or compound arrowheads. Shape bindings stored normalized anchors, side and focus information, and optional gaps, then resolved them against the target shape's rotation and current bounds.
+
+`AnnotationHistory.swift` recorded only changed scene snapshots, capped undo history at a configurable capacity with a default of 100, cleared redo state after new edits, and moved the current snapshot between stacks during undo and redo.
+
+`AnnotationHitTester.swift` checked editable selection handles before element bodies and traversed elements in reverse order for topmost body hits. Hit radii combined screen-space tolerance, stroke width, and rough-stroke deviation. Geometry-specific checks used smoothed polylines for freehand strokes, adaptive connector approximations with a stroked-path fallback when subdivision limits were reached, fill and stroke tests for shapes, expanded bounds for text, and separate filled or outlined arrowhead handling. Linear-edit hit testing prioritized Bezier controls and vertices before connector segments.
+
+`AnnotationRenderer.swift` dispatched freehand, shape, linear, and text geometry through a shared world transform and style setup. It rendered selection outlines, resize and rotation handles, marquees, linear-edit vertices and controls, construction previews, ghost connectors, and pending-erasure opacity. Highlighters and legacy highlight styles were grouped into transparency layers so overlapping strokes in the same run did not repeatedly darken.
+
+Active freehand rendering cached 128-sample chunks with a four-sample overlap and rebuilt only the affected tail after stable appends or tail mutations. Committed freehand rendering cached path data by element content, style, rotation, and destination scale. The cache retained at most two scale variants per element, enforced entry and estimated-cost limits with least-recently-used eviction, removed stale elements, and exposed counters for cache-focused tests. Eligible single-chunk active strokes could be promoted directly into the committed cache.
+
+Shape rendering supported no fill, solid fill, hachure, and cross-hatch modes. Pattern phase was derived deterministically from the element ID, and all rough rendering passed stable salts into the rough-stroke generator. Linear rendering shortened shafts around arrowheads, pinned bound endpoints during rough perturbation, retained a legacy straight-arrow path, and rendered text through AppKit with optional scaling into stored bounds. Multiple rough passes were combined in transparency layers so opacity applied to the aggregate result rather than independently to each pass.
+
+The reviewed portion of `AnnotationRoughStroke.swift` parsed canonical paths into line, quadratic, and cubic segments and used a deterministic seeded generator derived from element IDs, salts, pass numbers, and subpath indices. Architect styling returned canonical geometry, while artist and cartoonist styles generated one or more perturbed paths from sloppiness and stroke-width profiles. Ellipse perturbation used sampled normals and tangents, and pressure-sensitive strokes generated filled outlines from pressure-scaled widths while maintaining phase continuity through cumulative arc length and the supplied starting offset.
+
+### Notable Patterns
+
+- Interaction thresholds, handles, decorations, hit tolerances, rough offsets, and minimum rendered widths were normalized against zoom or destination scale.
+- Mutable annotation behavior was isolated behind scene transactions, and rendering and geometry entry points that interact with AppKit were constrained to `@MainActor`.
+- Element identity drove deterministic visual variation. Separate salts kept freehand strokes, shape outlines, fills, hachures, connector shafts, and arrowheads visually stable but independently varied.
+- Geometry was reused across editing, hit testing, rendering, and bounds calculations, which kept connector approximation, arrowhead sizing, rotation transforms, and rough-stroke extents consistent across those surfaces.
+- Explicit computational and memory bounds appeared throughout the implementation, including interpolation caps, cubic subdivision limits, history capacity, cache entry and cost limits, and per-element scale-variant limits.
+- Chunks 13 and 24 started and ended inside larger added files. The `AnnotationEditor.swift` findings cover only its assigned trailing portion, and the `AnnotationRoughStroke.swift` findings cover only the implementation present through chunk 24.

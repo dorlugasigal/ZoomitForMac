@@ -450,6 +450,12 @@ final class DrawingToolbarController: NSObject {
             ?? bestScreen(for: toolbarPanel.frame) else {
             return
         }
+        applyToolbarFrame(
+            animated: false,
+            preservingCurrentOrigin: true,
+            screen: activeScreen
+        )
+        applyInspectorFrame(screen: activeScreen)
         persistToolbarPosition(
             origin: toolbarPanel.frame.origin,
             visibleFrame: activeScreen.visibleFrame
