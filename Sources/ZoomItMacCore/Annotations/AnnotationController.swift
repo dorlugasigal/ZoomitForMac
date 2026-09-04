@@ -534,6 +534,7 @@ final class AnnotationController {
         outlinedSloppiness = .artist
         geometryFillColor = .palette(.red)
         geometryFillStyle = .none
+        penOpacity = 1
         geometryOpacity = 1
         highlighterOpacity = 1
         freehandSloppiness = .artist

@@ -10843,7 +10843,9 @@ public enum SelfTestRunner {
         )
 
         let reset = AnnotationController()
-        reset.applyDrawingDefaults(.default, strokeWidth: 7)
+        reset.currentTool = .pen
+        reset.setOpacity(0.4)
+        reset.reset()
         try expect(
             reset.currentTool == .pen
                 && reset.currentStyle.opacity == 1
