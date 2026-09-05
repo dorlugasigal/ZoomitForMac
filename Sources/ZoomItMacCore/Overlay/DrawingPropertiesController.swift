@@ -6,6 +6,8 @@ final class DrawingPropertiesController: NSViewController {
     private let colorPickerCoordinator: DrawingColorPickerCoordinator
     private var latestState: DrawingToolbarState?
     private var isUpdating = false
+    private var arrangedSections: [DrawingInspectorSection]?
+    private var arrangedWidth: CGFloat?
     private var sections: [DrawingInspectorSection: NSStackView] = [:]
     private var sectionWidthConstraints: [DrawingInspectorSection: NSLayoutConstraint] = [:]
     private var compactableHorizontalStacks: [NSStackView] = []
@@ -255,8 +257,7 @@ final class DrawingPropertiesController: NSViewController {
         isUpdating = true
         defer {
             isUpdating = false
-            rebuildSectionLayout()
-            updatePreferredContentSize()
+            updateSectionLayoutIfNeeded()
         }
 
         let visibleSections = Set(state.visibleInspectorSections)
@@ -360,10 +361,11 @@ final class DrawingPropertiesController: NSViewController {
     }
 
     func setAvailableHorizontalWidth(_ availableWidth: CGFloat) {
-        self.availableHorizontalWidth = max(1, availableWidth)
+        let width = max(1, availableWidth)
+        guard self.availableHorizontalWidth != width else { return }
+        self.availableHorizontalWidth = width
         guard isViewLoaded else { return }
-        rebuildSectionLayout()
-        updatePreferredContentSize()
+        updateSectionLayoutIfNeeded()
     }
 
     var colorPickerStateForTesting: DrawingColorPickerCoordinatorState {
@@ -881,6 +883,17 @@ final class DrawingPropertiesController: NSViewController {
             width: currentSectionLayout.documentWidth,
             height: root.frame.height
         )
+    }
+
+    private func updateSectionLayoutIfNeeded() {
+        let visibleSections = latestState?.visibleInspectorSections ?? []
+        guard arrangedSections != visibleSections || arrangedWidth != availableHorizontalWidth else {
+            return
+        }
+        rebuildSectionLayout()
+        updatePreferredContentSize()
+        arrangedSections = visibleSections
+        arrangedWidth = availableHorizontalWidth
     }
 
     private func rebuildSectionLayout() {

@@ -137,7 +137,8 @@ enum AnnotationGeometry {
     }
 
     static func worldTransform(for element: AnnotationElement) -> CGAffineTransform {
-        rotationTransform(
+        guard element.metadata.rotation != 0 else { return .identity }
+        return rotationTransform(
             angle: element.metadata.rotation,
             around: rotationPivot(for: element)
         )
@@ -152,38 +153,6 @@ enum AnnotationGeometry {
 
     static func inverseWorldTransform(for element: AnnotationElement) -> CGAffineTransform {
         worldTransform(for: element).inverted()
-    }
-
-    static func routedEndpointDirection(
-        for side: AnnotationBindingSide,
-        targetRotation: CGFloat,
-        connectorRotation: CGFloat,
-        fallback: AnnotationEndpointDirection
-    ) -> AnnotationEndpointDirection {
-        let targetLocalVector: CGPoint
-        switch side {
-        case .automatic:
-            return fallback
-        case .top:
-            targetLocalVector = CGPoint(x: 0, y: -1)
-        case .trailing:
-            targetLocalVector = CGPoint(x: 1, y: 0)
-        case .bottom:
-            targetLocalVector = CGPoint(x: 0, y: 1)
-        case .leading:
-            targetLocalVector = CGPoint(x: -1, y: 0)
-        }
-
-        let worldVector = targetLocalVector.applying(
-            CGAffineTransform(rotationAngle: targetRotation)
-        )
-        let connectorLocalVector = worldVector.applying(
-            CGAffineTransform(rotationAngle: -connectorRotation)
-        )
-        if abs(connectorLocalVector.x) >= abs(connectorLocalVector.y) {
-            return connectorLocalVector.x >= 0 ? .trailing : .leading
-        }
-        return connectorLocalVector.y >= 0 ? .down : .up
     }
 
     static func shapePath(
@@ -331,7 +300,7 @@ enum AnnotationGeometry {
         guard let first = linear.points.first else { return path }
         path.move(to: first)
         switch linear.route {
-        case .straight, .elbow:
+        case .straight:
             for point in linear.points.dropFirst() {
                 path.addLine(to: point)
             }
@@ -658,9 +627,6 @@ enum AnnotationGeometry {
         } else {
             result.points.insert(location.point, at: segmentIndex + 1)
             result.bezierControls = []
-            if result.route == .elbow {
-                result.isElbowAutoRouted = false
-            }
         }
         return result
     }
@@ -679,9 +645,6 @@ enum AnnotationGeometry {
         switch linear.route {
         case .straight:
             result.bezierControls = []
-        case .elbow:
-            result.bezierControls = []
-            result.isElbowAutoRouted = false
         case .curved:
             let controls = bezierControls(for: linear)
             result.bezierControls = zip(

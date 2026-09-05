@@ -312,15 +312,6 @@ struct DrawingDefaults: Equatable {
         pressureMode = .fixed
     }
 
-    mutating func normalizeLinearRouteDefaults() {
-        if lineRoute == .elbow {
-            lineRoute = .straight
-        }
-        if arrowRoute == .elbow {
-            arrowRoute = .curved
-        }
-    }
-
     func annotationStyle(strokeWidth: CGFloat) -> AnnotationStyle {
         var style = AnnotationStyle(
             color: strokeColor.paletteColor ?? .red,
@@ -1017,7 +1008,6 @@ final class UserDefaultsSettingsStore: SettingsStore {
 
     private static func encodeDrawingDefaults(_ drawingDefaults: DrawingDefaults) -> [String: Any] {
         var drawingDefaults = drawingDefaults
-        drawingDefaults.normalizeLinearRouteDefaults()
         drawingDefaults.normalizeSmartDrawPressure()
         var encoded: [String: Any] = [
             "schemaVersion": drawingDefaultsSchemaVersion,
@@ -1172,7 +1162,6 @@ final class UserDefaultsSettingsStore: SettingsStore {
            let route = linearRoute(named: name) {
             decoded.arrowRoute = route
         }
-        decoded.normalizeLinearRouteDefaults()
         if let name = encoded["startArrowhead"] as? String,
            let arrowhead = arrowhead(named: name) {
             decoded.startArrowhead = arrowhead
@@ -1317,7 +1306,6 @@ final class UserDefaultsSettingsStore: SettingsStore {
         switch route {
         case .straight: "straight"
         case .curved: "curved"
-        case .elbow: "elbow"
         }
     }
 
@@ -1325,7 +1313,6 @@ final class UserDefaultsSettingsStore: SettingsStore {
         switch name {
         case "straight": .straight
         case "curved": .curved
-        case "elbow": .elbow
         default: nil
         }
     }

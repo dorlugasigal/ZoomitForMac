@@ -1439,14 +1439,6 @@ extension DrawingInspectorPreview {
                     )
                 )
             ]
-        case .elbow:
-            points = [
-                start,
-                CGPoint(x: rect.midX, y: start.y),
-                CGPoint(x: rect.midX, y: end.y),
-                end
-            ]
-            bezierControls = []
         }
         return AnnotationLinearGeometry(
             points: points,
@@ -1455,8 +1447,7 @@ extension DrawingInspectorPreview {
             endArrowhead: .none,
             startBinding: nil,
             endBinding: nil,
-            bezierControls: bezierControls,
-            isElbowAutoRouted: false
+            bezierControls: bezierControls
         )
     }
 

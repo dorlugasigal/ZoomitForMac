@@ -310,9 +310,6 @@ final class AnnotationEditor {
                 linear.bezierControls = []
             case .curved:
                 linear.bezierControls = AnnotationGeometry.bezierControls(for: linear)
-            case .elbow:
-                linear.bezierControls = []
-                linear.isElbowAutoRouted = true
             }
             element.geometry = .linear(linear)
         }
@@ -947,11 +944,7 @@ final class AnnotationEditor {
             case .segment(let segmentIndex):
                 moveLinearPoints(
                     [segmentIndex, segmentIndex + 1],
-                    by: constrainedSegmentDelta(
-                        delta,
-                        segmentIndex: segmentIndex,
-                        linear: linear
-                    ),
+                    by: delta,
                     linear: &linear
                 )
             case .control(let segmentIndex, let end):
@@ -972,10 +965,6 @@ final class AnnotationEditor {
                         linear: &linear
                     )
                 }
-            }
-            if linear.route == .elbow {
-                linear.isElbowAutoRouted = false
-                orthogonalize(&linear, around: drag.part)
             }
             element.geometry = .linear(linear)
         }
@@ -1034,24 +1023,6 @@ final class AnnotationEditor {
         }
     }
 
-    private func constrainedSegmentDelta(
-        _ delta: CGPoint,
-        segmentIndex: Int,
-        linear: AnnotationLinearGeometry
-    ) -> CGPoint {
-        guard linear.route == .elbow,
-              segmentIndex >= 0,
-              segmentIndex < linear.points.count - 1 else {
-            return delta
-        }
-        let start = linear.points[segmentIndex]
-        let end = linear.points[segmentIndex + 1]
-        if abs(end.x - start.x) >= abs(end.y - start.y) {
-            return CGPoint(x: 0, y: delta.y)
-        }
-        return CGPoint(x: delta.x, y: 0)
-    }
-
     private func mirrorOppositeControl(
         from part: AnnotationLinearEditPart,
         equalLength: Bool,
@@ -1101,55 +1072,6 @@ final class AnnotationEditor {
             linear.bezierControls[oppositeSegmentIndex].start = mirrored
         case .end:
             linear.bezierControls[oppositeSegmentIndex].end = mirrored
-        }
-    }
-
-    private func orthogonalize(
-        _ linear: inout AnnotationLinearGeometry,
-        around part: AnnotationLinearEditPart
-    ) {
-        guard linear.points.count > 1 else { return }
-        switch part {
-        case .segment(let segmentIndex):
-            guard segmentIndex >= 0, segmentIndex < linear.points.count - 1 else { return }
-            let start = linear.points[segmentIndex]
-            let end = linear.points[segmentIndex + 1]
-            if abs(end.x - start.x) >= abs(end.y - start.y) {
-                linear.points[segmentIndex + 1].y = start.y
-            } else {
-                linear.points[segmentIndex + 1].x = start.x
-            }
-        case .point(let index):
-            if index > 0 {
-                alignPoint(
-                    &linear.points[index - 1],
-                    to: linear.points[index],
-                    preservingHorizontal: abs(linear.points[index - 1].x - linear.points[index].x)
-                        >= abs(linear.points[index - 1].y - linear.points[index].y)
-                )
-            }
-            if index < linear.points.count - 1 {
-                alignPoint(
-                    &linear.points[index + 1],
-                    to: linear.points[index],
-                    preservingHorizontal: abs(linear.points[index + 1].x - linear.points[index].x)
-                        >= abs(linear.points[index + 1].y - linear.points[index].y)
-                )
-            }
-        case .control:
-            break
-        }
-    }
-
-    private func alignPoint(
-        _ point: inout CGPoint,
-        to anchor: CGPoint,
-        preservingHorizontal: Bool
-    ) {
-        if preservingHorizontal {
-            point.y = anchor.y
-        } else {
-            point.x = anchor.x
         }
     }
 

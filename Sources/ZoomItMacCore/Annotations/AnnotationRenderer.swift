@@ -2,6 +2,7 @@ import AppKit
 
 struct AnnotationActiveStrokeCacheCounters: Equatable {
     var rebuiltChunks = 0
+    var drawnChunks = 0
 }
 
 struct AnnotationCommittedStrokeCacheCounters: Equatable {
@@ -22,6 +23,14 @@ final class AnnotationRenderer {
         var index: Int
         var paths: [CGPath]
         var kind: ActiveChunkKind
+        var bounds: CGRect
+
+        init(index: Int, paths: [CGPath], kind: ActiveChunkKind) {
+            self.index = index
+            self.paths = paths
+            self.kind = kind
+            bounds = paths.reduce(CGRect.null) { $0.union($1.boundingBoxOfPath) }
+        }
     }
 
     private struct ActiveFreehandCache {
@@ -89,6 +98,35 @@ final class AnnotationRenderer {
 
     private static let activeChunkSampleCount = 128
     private static let activeChunkOverlap = 4
+
+    /// Smoothing can change the preceding chunk as well as the current tail.
+    /// Invalidate their full extent, including the prior tail before an append.
+    static func activeTailBounds(
+        of element: AnnotationElement?,
+        destinationScale: CGFloat
+    ) -> CGRect {
+        guard let element, case .freehand(let freehand) = element.geometry,
+              let last = freehand.samples.last else { return .null }
+        let scale = max(0.001, destinationScale)
+        let firstIndex = max(0, (freehand.samples.count - 1 - activeChunkOverlap)
+            / activeChunkSampleCount * activeChunkSampleCount - activeChunkOverlap)
+        var minX = last.location.x, maxX = minX
+        var minY = last.location.y, maxY = minY
+        for sample in freehand.samples[firstIndex...] {
+            minX = min(minX, sample.location.x)
+            maxX = max(maxX, sample.location.x)
+            minY = min(minY, sample.location.y)
+            maxY = max(maxY, sample.location.y)
+        }
+        let padding = element.style.strokeWidth
+            + (AnnotationRoughStroke.maximumDestinationDeviation(
+                for: element.effectiveSloppiness,
+                strokeWidth: element.style.strokeWidth
+            ) + 2) / scale
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+            .applying(AnnotationGeometry.worldTransform(for: element))
+            .insetBy(dx: -padding, dy: -padding)
+    }
     private static let defaultCommittedStrokeCacheCostLimit = 32 * 1_024 * 1_024
     private static let defaultCommittedStrokeCacheEntryLimit = 512
     private static let committedScaleVariantLimit = 2
@@ -686,35 +724,8 @@ final class AnnotationRenderer {
             preview.points.append(pointer)
             preview.bezierControls = []
             preview.bezierControls = AnnotationGeometry.bezierControls(for: preview)
-        case .elbow:
-            preview.points.append(contentsOf: orthogonalExtension(
-                from: committed.points,
-                to: pointer
-            ))
-            preview.bezierControls = []
-            preview.isElbowAutoRouted = false
         }
         return preview
-    }
-
-    private func orthogonalExtension(from points: [CGPoint], to point: CGPoint) -> [CGPoint] {
-        guard let last = points.last else { return [point] }
-        if abs(point.x - last.x) <= 0.5 || abs(point.y - last.y) <= 0.5 {
-            return [point]
-        }
-
-        let horizontalFirst: Bool
-        if points.count >= 2 {
-            let previous = points[points.count - 2]
-            let previousWasHorizontal = abs(last.x - previous.x) >= abs(last.y - previous.y)
-            horizontalFirst = !previousWasHorizontal
-        } else {
-            horizontalFirst = abs(point.x - last.x) >= abs(point.y - last.y)
-        }
-        let bend = horizontalFirst
-            ? CGPoint(x: point.x, y: last.y)
-            : CGPoint(x: last.x, y: point.y)
-        return [bend, point]
     }
 
     private func drawFreehand(
@@ -1033,6 +1044,8 @@ final class AnnotationRenderer {
                 opacity: style.opacity,
                 forceOpaque: forceOpaque
             )
+            let clipBounds = context.boundingBoxOfClipPath
+            let strokePadding = max(style.strokeWidth, 2 / max(destinationScale, 0.001))
             context.saveGState()
             context.setAlpha(resolved.alpha)
             context.beginTransparencyLayer(auxiliaryInfo: nil)
@@ -1049,14 +1062,20 @@ final class AnnotationRenderer {
                 )
                 context.setLineCap(freehand.isHighlighter ? .butt : .round)
                 context.setLineJoin(freehand.isHighlighter ? .bevel : .round)
-                for chunk in chunks {
+                for chunk in chunks where chunk.bounds.insetBy(
+                    dx: -strokePadding, dy: -strokePadding
+                ).intersects(clipBounds) {
+                    activeStrokeCacheCountersForTesting.drawnChunks += 1
                     for path in chunk.paths {
                         context.addPath(path)
                         context.strokePath()
                     }
                 }
             case .fill:
-                for chunk in chunks {
+                for chunk in chunks where chunk.bounds.insetBy(
+                    dx: -strokePadding, dy: -strokePadding
+                ).intersects(clipBounds) {
+                    activeStrokeCacheCountersForTesting.drawnChunks += 1
                     for path in chunk.paths {
                         context.addPath(path)
                         context.fillPath()

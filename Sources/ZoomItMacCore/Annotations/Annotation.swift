@@ -976,7 +976,6 @@ struct AnnotationShapeGeometry: Equatable {
 enum AnnotationLinearRoute: Equatable {
     case straight
     case curved
-    case elbow
 
     static let userSelectableRoutes: [AnnotationLinearRoute] = [
         .straight,
@@ -995,17 +994,8 @@ enum AnnotationLinearRoute: Equatable {
         switch self {
         case .straight: "Straight"
         case .curved: "Curved"
-        case .elbow: "Elbow"
         }
     }
-}
-
-enum AnnotationEndpointDirection: Equatable {
-    case automatic
-    case up
-    case trailing
-    case down
-    case leading
 }
 
 enum AnnotationArrowhead: Equatable {
@@ -1487,9 +1477,6 @@ struct AnnotationLinearGeometry: Equatable {
     var startBinding: AnnotationBinding?
     var endBinding: AnnotationBinding?
     var bezierControls: [AnnotationBezierControl]
-    var startDirection: AnnotationEndpointDirection
-    var endDirection: AnnotationEndpointDirection
-    var isElbowAutoRouted: Bool
     var rotationPivot: CGPoint?
 
     var isHeadless: Bool {
@@ -1505,9 +1492,6 @@ struct AnnotationLinearGeometry: Equatable {
         startBinding: AnnotationBinding?,
         endBinding: AnnotationBinding?,
         bezierControls: [AnnotationBezierControl] = [],
-        startDirection: AnnotationEndpointDirection = .automatic,
-        endDirection: AnnotationEndpointDirection = .automatic,
-        isElbowAutoRouted: Bool = true,
         rotationPivot: CGPoint? = nil
     ) {
         self.points = points
@@ -1518,9 +1502,6 @@ struct AnnotationLinearGeometry: Equatable {
         self.startBinding = startBinding
         self.endBinding = endBinding
         self.bezierControls = bezierControls
-        self.startDirection = startDirection
-        self.endDirection = endDirection
-        self.isElbowAutoRouted = isElbowAutoRouted
         self.rotationPivot = rotationPivot
     }
 }
@@ -1598,7 +1579,6 @@ struct AnnotationTextGeometry: Equatable {
     var fontSize: CGFloat
     var fontName: String
     var alignment: AnnotationTextAlignment
-    var isEditing: Bool
 }
 
 enum AnnotationElementGeometry: Equatable {
@@ -1609,7 +1589,6 @@ enum AnnotationElementGeometry: Equatable {
 }
 
 struct AnnotationElementMetadata: Equatable {
-    var zIndex: Int
     var groupIDs: [AnnotationGroupID]
     var isLocked: Bool
     var rotation: CGFloat
@@ -1617,7 +1596,6 @@ struct AnnotationElementMetadata: Equatable {
     var wasSmartDrawRecognized: Bool
 
     static let `default` = AnnotationElementMetadata(
-        zIndex: 0,
         groupIDs: [],
         isLocked: false,
         rotation: 0,
@@ -1709,82 +1687,11 @@ struct AnnotationElement: Equatable {
                     text: text,
                     fontSize: fontSize,
                     fontName: fontName,
-                    alignment: textAlignment ?? (rightAligned ? .right : .left),
-                    isEditing: true
+                    alignment: textAlignment ?? (rightAligned ? .right : .left)
                 )
             )
         }
         return AnnotationElement(id: id, geometry: geometry, style: style)
     }
 
-    var legacyAnnotation: Annotation {
-        switch geometry {
-        case .freehand(let freehand):
-            return Annotation(
-                id: id,
-                tool: freehand.isHighlighter ? .highlighter : .pen,
-                points: freehand.samples.map(\.location),
-                style: style
-            )
-        case .shape(let shape):
-            let tool: AnnotationTool
-            switch shape.kind {
-            case .rectangle: tool = .rectangle
-            case .diamond: tool = .diamond
-            case .ellipse: tool = .ellipse
-            }
-            return Annotation(id: id, tool: tool, points: [shape.start, shape.end], style: style)
-        case .linear(let linear):
-            let isLegacyArrow = linear.startArrowhead == .arrow && linear.endArrowhead == .none
-            return Annotation(
-                id: id,
-                tool: isLegacyArrow ? .arrow : .line,
-                points: linear.points,
-                style: style
-            )
-        case .text(let text):
-            return Annotation(
-                id: id,
-                tool: .text,
-                points: [text.origin],
-                style: style,
-                text: text.text,
-                fontSize: text.fontSize,
-                fontName: text.fontName,
-                rightAligned: text.alignment == .right
-            )
-        }
-    }
-}
-
-/// Compatibility value used by the existing renderer and focused self-tests.
-struct Annotation: Equatable {
-    var id: AnnotationElementID
-    var tool: AnnotationTool
-    var points: [CGPoint]
-    var style: AnnotationStyle
-    var text: String
-    var fontSize: CGFloat
-    var fontName: String
-    var rightAligned: Bool
-
-    init(
-        id: AnnotationElementID = AnnotationElementID(),
-        tool: AnnotationTool,
-        points: [CGPoint],
-        style: AnnotationStyle,
-        text: String = "",
-        fontSize: CGFloat = 36,
-        fontName: String = "",
-        rightAligned: Bool = false
-    ) {
-        self.id = id
-        self.tool = tool
-        self.points = points
-        self.style = style
-        self.text = text
-        self.fontSize = fontSize
-        self.fontName = fontName
-        self.rightAligned = rightAligned
-    }
 }

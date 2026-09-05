@@ -242,12 +242,6 @@ final class ZoomCanvasView: NSView {
     private var hasImmediateFreehandMovement = false
     private let immediateFreehandTailLayer = CAShapeLayer()
     private let immediateFreehandPointerLayer = CAShapeLayer()
-    private struct PendingFreehandEnd {
-        var pressure: CGFloat?
-        var timestamp: TimeInterval?
-        var zoomScale: CGFloat
-    }
-    private var pendingFreehandEnd: PendingFreehandEnd?
     private var freehandInvalidationState = DrawingFreehandFrameInvalidationState()
     private var isDrawingAccessoryInteractionActive = false
     /// The tool of the in-progress stroke, used to hide the pen cursor while a
@@ -298,7 +292,7 @@ final class ZoomCanvasView: NSView {
     private var blankScreen: BlankScreen?
 
     var hasPendingAnnotationInputForTesting: Bool {
-        freehandDisplayLink != nil || pendingFreehandEnd != nil || isStroking
+        freehandDisplayLink != nil || isStroking
     }
 
     var hasActiveFreehandDrainTimerForTesting: Bool {
@@ -425,6 +419,9 @@ final class ZoomCanvasView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
 
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.clip(to: dirtyRect)
         context.interpolationQuality = smoothImage ? .high : .none
 
         let source = viewportController.sourceRect(for: bounds, cursorLocation: latestCursorLocation)
@@ -785,7 +782,6 @@ final class ZoomCanvasView: NSView {
                     timestamp: input.timestamp,
                     zoomScale: currentAnnotationZoomScale
                 )
-                pendingFreehandEnd = nil
                 freehandInvalidationState.noteInput()
                 stopFreehandDrainTimer()
                 clearImmediateFreehandPresentation()
@@ -1791,10 +1787,15 @@ final class ZoomCanvasView: NSView {
         immediateFreehandTailLayer.lineJoin =
             freehand.isHighlighter ? .bevel : .round
         if points.count > 1 {
-            let tailPath = CGMutablePath()
-            tailPath.move(to: points[0])
-            for point in points.dropFirst() {
-                tailPath.addLine(to: point)
+            let tailPath: CGPath
+            if style.smoothingEnabled {
+                tailPath = AnnotationGeometry.smoothedFreehandPath(
+                    points.map { AnnotationPointSample(location: $0, pressure: nil) }
+                )
+            } else {
+                let rawPath = CGMutablePath()
+                rawPath.addLines(between: points)
+                tailPath = rawPath
             }
             immediateFreehandTailLayer.path = tailPath
             immediateFreehandTailLayer.isHidden = false
@@ -1874,7 +1875,6 @@ final class ZoomCanvasView: NSView {
     private func exitDrawingMode(restoreCursor: Bool = true) {
         guard isDrawingMode else { return }
         stopFreehandDrainTimer()
-        pendingFreehandEnd = nil
         clearImmediateFreehandPresentation()
         annotationController.resolveActiveGestureForExit(
             zoomScale: currentAnnotationZoomScale
@@ -1920,7 +1920,7 @@ final class ZoomCanvasView: NSView {
 
     private func scheduleFreehandDrain() {
         guard freehandDisplayLink == nil,
-              isStroking || pendingFreehandEnd != nil else {
+              isStroking else {
             return
         }
         let displayLink = displayLink(
@@ -1942,10 +1942,12 @@ final class ZoomCanvasView: NSView {
     }
 
     private func drainFreehandFrame() {
+        guard annotationController.hasPendingFreehandInput else { return }
+        let zoomScale = currentAnnotationZoomScale
+        let oldTailBounds = annotationController.activeFreehandTailBounds(zoomScale: zoomScale)
         let rawCount = annotationController.pendingRawFreehandInputCountForTesting
         let stats = annotationController.drainFreehandInput(
-            zoomScale: pendingFreehandEnd?.zoomScale
-                ?? currentAnnotationZoomScale,
+            zoomScale: zoomScale,
             budget: AnnotationFreehandDrainBudget(
                 maximumRawEvents: rawCount > 20 ? 12 : 8,
                 maximumGeneratedSamples: rawCount > 20 ? 96 : 128,
@@ -1953,30 +1955,20 @@ final class ZoomCanvasView: NSView {
             )
         )
         if stats.generatedSamples > 0, freehandInvalidationState.beginFrame() {
-            needsDisplay = true
+            let dirtyContent = oldTailBounds.union(
+                annotationController.activeFreehandTailBounds(zoomScale: zoomScale)
+            )
+            let source = viewportController.sourceRect(
+                for: bounds, cursorLocation: latestCursorLocation
+            )
+            let transform = viewportController.contentToDestinationTransform(
+                source: source, destinationBounds: bounds
+            )
+            setNeedsDisplay(dirtyContent.applying(transform).integral.intersection(bounds))
         }
         refreshImmediateFreehandPresentation()
         if annotationController.hasPendingFreehandInput {
             freehandInvalidationState.noteInput()
-        }
-        guard !annotationController.hasPendingFreehandInput else { return }
-        if let pendingFreehandEnd {
-            _ = annotationController.finishQueuedFreehand(
-                endingPressure: pendingFreehandEnd.pressure,
-                timestamp: pendingFreehandEnd.timestamp,
-                zoomScale: pendingFreehandEnd.zoomScale
-            )
-            self.pendingFreehandEnd = nil
-            restoreMouseCoalescingIfNeeded()
-            isStroking = false
-            activeStrokeTool = nil
-            linearPointerGesture = nil
-            transientToolDidChange(nil)
-            updateLinearFinishHandleHover()
-            applyCursorPolicy()
-            stopFreehandDrainTimer()
-        } else {
-            stopFreehandDrainTimer()
         }
     }
 
@@ -1987,7 +1979,6 @@ final class ZoomCanvasView: NSView {
 
     private func cancelActiveStrokeTracking() {
         stopFreehandDrainTimer()
-        pendingFreehandEnd = nil
         clearImmediateFreehandPresentation()
         restoreMouseCoalescingIfNeeded()
         isStroking = false

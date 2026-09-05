@@ -37,6 +37,7 @@ final class DrawingToolbarController: NSObject {
     private var inspectorView: DrawingInspectorView!
     private var propertiesController: DrawingPropertiesController!
     private var currentState: DrawingToolbarState
+    private var lastAppliedState: DrawingToolbarState?
     private var transientTool: AnnotationTool?
     private var toolbarNormalizedPosition: CGPoint?
     private var interactionState = DrawingAccessoryInteractionState()
@@ -326,6 +327,7 @@ final class DrawingToolbarController: NSObject {
     func show() {
         guard !isPanelVisible else { return }
         isPanelVisible = true
+        lastAppliedState = nil
         applyToolbarFrame(animated: false)
         toolbarPanel.orderFront(nil)
         updateState(DrawingToolbarState(annotationController: annotationController))
@@ -364,6 +366,8 @@ final class DrawingToolbarController: NSObject {
     }
 
     func updateState(_ state: DrawingToolbarState) {
+        guard lastAppliedState != state else { return }
+        lastAppliedState = state
         currentState = state
         propertiesController.update(state: state)
         updateViews()
@@ -784,8 +788,10 @@ final class DrawingToolbarController: NSObject {
             previousAlignment: attachedInspectorAlignment
         )
         attachedInspectorAlignment = placement.alignment
-        inspectorPanel.setFrame(placement.frame, display: true)
-        orderInspectorFront()
+        if inspectorPanel.frame != placement.frame {
+            inspectorPanel.setFrame(placement.frame, display: true)
+        }
+        if !isInspectorOrderedVisible { orderInspectorFront() }
     }
 
     private func orderInspectorFront() {
@@ -807,6 +813,7 @@ final class DrawingToolbarController: NSObject {
         animated: Bool,
         isToolbar: Bool
     ) {
+        guard panel.frame != frame else { return }
         if animated && panel.isVisible {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.16

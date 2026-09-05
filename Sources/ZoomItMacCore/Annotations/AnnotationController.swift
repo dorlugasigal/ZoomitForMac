@@ -260,10 +260,6 @@ final class AnnotationController {
         onStateChanged?()
     }
 
-    var annotationSnapshot: [Annotation] {
-        scene.elements.map(\.legacyAnnotation)
-    }
-
     var sceneSnapshot: AnnotationSceneSnapshot {
         scene.snapshot
     }
@@ -276,12 +272,12 @@ final class AnnotationController {
         scene.elements.filter { scene.selection.contains($0.id) }
     }
 
-    var inProgressSnapshot: Annotation? {
-        inProgress?.legacyAnnotation
-    }
-
     var inProgressElementSnapshot: AnnotationElement? {
         inProgress
+    }
+
+    func activeFreehandTailBounds(zoomScale: CGFloat) -> CGRect {
+        AnnotationRenderer.activeTailBounds(of: inProgress, destinationScale: zoomScale)
     }
 
     var committedStrokeCacheCountersForTesting:
@@ -555,13 +551,6 @@ final class AnnotationController {
 
     func setInsertionPoint(_ point: CGPoint) {
         insertionPointWriteCountForTesting += 1
-        if let textAnnotationID {
-            scene.updateElement(withID: textAnnotationID, recordHistory: false) { element in
-                guard case .text(var text) = element.geometry else { return }
-                text.isEditing = false
-                element.geometry = .text(text)
-            }
-        }
         insertionPoint = point
         textAnnotationID = nil
     }
@@ -603,7 +592,6 @@ final class AnnotationController {
         scene.updateElement(withID: elementID, recordHistory: false) { element in
             guard case .text(var text) = element.geometry else { return }
             text.bounds = nil
-            text.isEditing = true
             element.geometry = .text(text)
         }
         editor.beginTextEditing(elementID: elementID)
@@ -611,13 +599,6 @@ final class AnnotationController {
     }
 
     func finishTypingSession() {
-        if let textAnnotationID {
-            scene.updateElement(withID: textAnnotationID, recordHistory: false) { element in
-                guard case .text(var text) = element.geometry else { return }
-                text.isEditing = false
-                element.geometry = .text(text)
-            }
-        }
         if textTransactionActive {
             scene.commitTransaction()
             textTransactionActive = false
@@ -784,7 +765,7 @@ final class AnnotationController {
     /// Whether text exists at the insertion point and the canvas should render
     /// the editing caret instead of the native pointer I-beam.
     var isTypingLocked: Bool {
-        activeTextAnnotation != nil
+        activeTextGeometry != nil
     }
 
     /// Returns the caret origin (top) and height in content space for the text
@@ -923,9 +904,6 @@ final class AnnotationController {
         }
         linear.points = [point]
         linear.bezierControls = []
-        if linear.route == .elbow {
-            linear.isElbowAutoRouted = false
-        }
         element.geometry = .linear(linear)
         inProgress = nil
         inProgressUsesLegacyLinearGesture = false
@@ -1959,21 +1937,11 @@ final class AnnotationController {
                 switch route {
                 case .straight:
                     linear.bezierControls = []
-                    linear.isElbowAutoRouted = false
                 case .curved:
                     linear.bezierControls = []
                     linear.bezierControls = AnnotationGeometry.bezierControls(
                         for: linear
                     )
-                    linear.isElbowAutoRouted = false
-                case .elbow:
-                    let anchors = linear.points
-                    linear.points = Array(anchors.prefix(1))
-                    linear.bezierControls = []
-                    linear.isElbowAutoRouted = false
-                    for point in anchors.dropFirst() {
-                        appendConstructionPoint(point, to: &linear)
-                    }
                 }
                 construction.element.geometry = .linear(linear)
                 linearConstruction = construction
@@ -2031,16 +1999,6 @@ final class AnnotationController {
 
     func unbindLinearEndpoints() {
         editor.unbindLinearEndpoints()
-    }
-
-    private var activeTextAnnotation: Annotation? {
-        guard let textAnnotationID,
-              let element = scene.element(withID: textAnnotationID),
-              !element.metadata.isLocked,
-              case .text = element.geometry else {
-            return nil
-        }
-        return element.legacyAnnotation
     }
 
     private var activeTextGeometry: AnnotationTextGeometry? {
@@ -2203,7 +2161,6 @@ final class AnnotationController {
             linear.route = .curved
             linear.bezierControls = AnnotationGeometry.bezierControls(for: linear)
         }
-        linear.isElbowAutoRouted = false
     }
 
     private static func supportsSloppiness(_ element: AnnotationElement) -> Bool {
@@ -2353,31 +2310,7 @@ final class AnnotationController {
             var generated = linear
             generated.bezierControls = []
             linear.bezierControls = AnnotationGeometry.bezierControls(for: generated)
-        case .elbow:
-            linear.points.append(contentsOf: orthogonalExtension(from: linear.points, to: point))
-            linear.bezierControls = []
-            linear.isElbowAutoRouted = false
         }
-    }
-
-    private func orthogonalExtension(from points: [CGPoint], to point: CGPoint) -> [CGPoint] {
-        guard let last = points.last else { return [point] }
-        if abs(point.x - last.x) <= 0.5 || abs(point.y - last.y) <= 0.5 {
-            return [point]
-        }
-
-        let horizontalFirst: Bool
-        if points.count >= 2 {
-            let previous = points[points.count - 2]
-            let previousWasHorizontal = abs(last.x - previous.x) >= abs(last.y - previous.y)
-            horizontalFirst = !previousWasHorizontal
-        } else {
-            horizontalFirst = abs(point.x - last.x) >= abs(point.y - last.y)
-        }
-        let bend = horizontalFirst
-            ? CGPoint(x: point.x, y: last.y)
-            : CGPoint(x: last.x, y: point.y)
-        return [bend, point]
     }
 
     private static func hasMinimumLinearPoints(_ points: [CGPoint]) -> Bool {
@@ -2928,14 +2861,19 @@ final class AnnotationController {
             smartDrawRejectedRecognitionCountForTesting += 1
             return
         }
+        let previousPreview = smartDrawTracker.displayCandidate
         smartDrawLatestCandidate = candidate
         smartDrawTracker.update(candidate)
-        notifySmartDrawStatusIfNeeded()
+        // Geometry can change while its rounded confidence label stays the same.
+        // Invalidate the old ghost too, not just the newly painted Pen tail.
+        notifySmartDrawStatusIfNeeded(
+            forceRedraw: previousPreview != smartDrawTracker.displayCandidate
+        )
     }
 
-    private func notifySmartDrawStatusIfNeeded() {
+    private func notifySmartDrawStatusIfNeeded(forceRedraw: Bool = false) {
         let status = smartDrawStatusText
-        guard status != lastNotifiedSmartDrawStatusText else { return }
+        guard forceRedraw || status != lastNotifiedSmartDrawStatusText else { return }
         lastNotifiedSmartDrawStatusText = status
         onStateChanged?()
     }

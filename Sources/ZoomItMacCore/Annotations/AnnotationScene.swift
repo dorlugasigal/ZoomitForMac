@@ -32,7 +32,6 @@ final class AnnotationScene {
         didSet { notifyChange() }
     }
     var onChange: (() -> Void)?
-    var onElbowRoute: ((AnnotationElementID) -> Void)?
 
     private var history: AnnotationHistory
     private var activeTransaction: ActiveTransaction?
@@ -46,7 +45,7 @@ final class AnnotationScene {
         self.currentTool = currentTool
         self.currentStyle = currentStyle
         history = AnnotationHistory()
-        normalizeOrdering()
+
         sanitizeBindings()
         refreshLinearGeometry(affectedBy: nil, previousElements: [])
     }
@@ -94,7 +93,7 @@ final class AnnotationScene {
         }
 
         activeTransaction = nil
-        normalizeOrdering()
+
         sanitizeBindings()
         sanitizeSelection()
         history.record(previous: transaction.previous, current: snapshot)
@@ -145,7 +144,7 @@ final class AnnotationScene {
             let previousElements = elements
             guard let index = elements.firstIndex(where: { $0.id == elementID }) else { return }
             update(&elements[index])
-            normalizeOrdering()
+
             sanitizeBindings()
             refreshLinearGeometry(
                 affectedBy: [elementID],
@@ -173,7 +172,7 @@ final class AnnotationScene {
             for index in elements.indices where elementIDs.contains(elements[index].id) {
                 update(&elements[index])
             }
-            normalizeOrdering()
+
             sanitizeBindings()
             refreshLinearGeometry(
                 affectedBy: elementIDs,
@@ -258,26 +257,8 @@ final class AnnotationScene {
             }
             if atStart {
                 linear.startBinding = binding
-                if let binding {
-                    linear.startDirection =
-                        AnnotationGeometry.routedEndpointDirection(
-                            for: binding.side,
-                            targetRotation: 0,
-                            connectorRotation: 0,
-                            fallback: .automatic
-                        )
-                }
             } else {
                 linear.endBinding = binding
-                if let binding {
-                    linear.endDirection =
-                        AnnotationGeometry.routedEndpointDirection(
-                            for: binding.side,
-                            targetRotation: 0,
-                            connectorRotation: 0,
-                            fallback: .automatic
-                        )
-                }
             }
             elements[index].geometry = .linear(linear)
         }
@@ -334,7 +315,7 @@ final class AnnotationScene {
         let previousElements = elements
         if activeTransaction != nil {
             mutation()
-            normalizeOrdering()
+
             sanitizeBindings()
             refreshLinearGeometry(
                 affectedBy: affectedElementIDs,
@@ -347,7 +328,7 @@ final class AnnotationScene {
 
         let previous = snapshot
         mutation()
-        normalizeOrdering()
+
         sanitizeBindings()
         refreshLinearGeometry(
             affectedBy: affectedElementIDs,
@@ -366,7 +347,7 @@ final class AnnotationScene {
 
     private func restore(_ snapshot: AnnotationSceneSnapshot) {
         elements = snapshot.elements
-        normalizeOrdering()
+
         sanitizeBindings()
         refreshLinearGeometry(affectedBy: nil, previousElements: [])
         let existingIDs = Set(elements.map(\.id))
@@ -375,12 +356,6 @@ final class AnnotationScene {
 
     private func notifyChange() {
         onChange?()
-    }
-
-    private func normalizeOrdering() {
-        for index in elements.indices {
-            elements[index].metadata.zIndex = index
-        }
     }
 
     private func sanitizeBindings() {
@@ -418,27 +393,17 @@ final class AnnotationScene {
         }
         let shapesByID = Dictionary(uniqueKeysWithValues: shapeElements.map { ($0.id, $0) })
         let previousByID = Dictionary(uniqueKeysWithValues: previousElements.map { ($0.id, $0) })
-        let routingChangedIDs = changedElementIDs.map { changedIDs in
+        let bindingChangedIDs = changedElementIDs.map { changedIDs in
             Set(changedIDs.filter { elementID in
-                routingGeometryChanged(
+                bindingGeometryChanged(
                     from: previousByID[elementID],
                     to: element(withID: elementID)
                 )
             })
         }
-        if routingChangedIDs?.isEmpty == true {
+        if bindingChangedIDs?.isEmpty == true {
             return
         }
-        let changedShapeBounds = routingChangedIDs.map { changedIDs in
-            changedIDs.flatMap { elementID -> [(AnnotationElementID, CGRect)] in
-                let previousBounds = routingObstacleBounds(for: previousByID[elementID])
-                let currentBounds = routingObstacleBounds(for: element(withID: elementID))
-                guard previousBounds != currentBounds else { return [] }
-                return [previousBounds, currentBounds].compactMap { worldBounds in
-                    worldBounds.map { (elementID, $0) }
-                }
-            }
-        } ?? []
 
         for index in elements.indices {
             guard case .linear(var linear) = elements[index].geometry,
@@ -461,9 +426,10 @@ final class AnnotationScene {
                     previousLinear?.endBinding?.targetElementID
                 ].compactMap { $0 }
             )
-            let refreshEndpoints = routingChangedIDs == nil
-                || routingChangedIDs?.contains(elementID) == true
-                || routingChangedIDs?.isDisjoint(with: boundTargetIDs) == false
+            let refreshEndpoints = bindingChangedIDs == nil
+                || bindingChangedIDs?.contains(elementID) == true
+                || bindingChangedIDs?.isDisjoint(with: boundTargetIDs) == false
+            guard refreshEndpoints else { continue }
             let originalPoints = linear.points
             if elements[index].metadata.rotation == 0 {
                 linear.rotationPivot = nil
@@ -476,105 +442,48 @@ final class AnnotationScene {
             let linearTransform = AnnotationGeometry.worldTransform(for: transformElement)
             let inverseLinearTransform = linearTransform.inverted()
 
-            if refreshEndpoints {
-                if let binding = linear.startBinding,
-                   let target = shapesByID[binding.targetElementID] {
-                    let neighbor = linear.points.count > 1 ? linear.points[1] : linear.points[0]
-                    let worldNeighbor = neighbor.applying(linearTransform)
-                    if let worldPoint = AnnotationGeometry.bindingPoint(
-                        for: binding,
-                        on: target,
-                        toward: worldNeighbor
-                    ) {
-                        linear.points[0] = worldPoint.applying(inverseLinearTransform)
-                    }
-                }
-                if let binding = linear.endBinding,
-                   let target = shapesByID[binding.targetElementID] {
-                    let neighborIndex = max(0, linear.points.count - 2)
-                    let worldNeighbor = linear.points[neighborIndex].applying(linearTransform)
-                    if let worldPoint = AnnotationGeometry.bindingPoint(
-                        for: binding,
-                        on: target,
-                        toward: worldNeighbor
-                    ) {
-                        linear.points[linear.points.count - 1] =
-                            worldPoint.applying(inverseLinearTransform)
-                    }
-                }
-
-                updateCurvedEndpointControls(
-                    &linear,
-                    oldStart: originalPoints.first,
-                    oldEnd: originalPoints.last
-                )
-            }
-
-            if linear.route == .elbow, linear.points.count > 1 {
-                if linear.isElbowAutoRouted {
-                    let clearance = max(12, elements[index].style.strokeWidth * 4)
-                    let shouldRoute = refreshEndpoints || routeMayBeAffected(
-                        linear,
-                        element: elements[index],
-                        changedShapeBounds: changedShapeBounds,
-                        excluding: boundTargetIDs,
-                        clearance: clearance
-                    )
-                    if shouldRoute {
-                        let obstacles = shapeElements.compactMap { shape -> ArrowRouter.Obstacle? in
-                            guard !boundTargetIDs.contains(shape.id) else { return nil }
-                            let worldBounds = AnnotationGeometry.worldBounds(
-                                of: shape,
-                                includingStroke: true
-                            )
-                            let localCorners = AnnotationGeometry.rectCorners(worldBounds).map {
-                                $0.applying(inverseLinearTransform)
-                            }
-                            return ArrowRouter.Obstacle(
-                                elementID: shape.id,
-                                bounds: bounds(of: localCorners)
-                            )
-                        }
-                        onElbowRoute?(elementID)
-                        linear.points = ArrowRouter.route(
-                            from: linear.points[0],
-                            to: linear.points[linear.points.count - 1],
-                            startDirection: resolvedEndpointDirection(
-                                stored: linear.startDirection,
-                                binding: linear.startBinding,
-                                targets: shapesByID,
-                                connectorRotation: elements[index].metadata.rotation
-                            ),
-                            endDirection: resolvedEndpointDirection(
-                                stored: linear.endDirection,
-                                binding: linear.endBinding,
-                                targets: shapesByID,
-                                connectorRotation: elements[index].metadata.rotation
-                            ),
-                            obstacles: obstacles,
-                            clearance: clearance
-                        )
-                    }
-                } else if refreshEndpoints {
-                    preserveManualElbowEndpoints(
-                        &linear,
-                        oldStart: originalPoints.first,
-                        oldEnd: originalPoints.last
-                    )
+            if let binding = linear.startBinding,
+               let target = shapesByID[binding.targetElementID] {
+                let neighbor = linear.points.count > 1 ? linear.points[1] : linear.points[0]
+                let worldNeighbor = neighbor.applying(linearTransform)
+                if let worldPoint = AnnotationGeometry.bindingPoint(
+                    for: binding,
+                    on: target,
+                    toward: worldNeighbor
+                ) {
+                    linear.points[0] = worldPoint.applying(inverseLinearTransform)
                 }
             }
+            if let binding = linear.endBinding,
+               let target = shapesByID[binding.targetElementID] {
+                let neighborIndex = max(0, linear.points.count - 2)
+                let worldNeighbor = linear.points[neighborIndex].applying(linearTransform)
+                if let worldPoint = AnnotationGeometry.bindingPoint(
+                    for: binding,
+                    on: target,
+                    toward: worldNeighbor
+                ) {
+                    linear.points[linear.points.count - 1] =
+                        worldPoint.applying(inverseLinearTransform)
+                }
+            }
+            updateCurvedEndpointControls(
+                &linear,
+                oldStart: originalPoints.first,
+                oldEnd: originalPoints.last
+            )
             elements[index].geometry = .linear(linear)
         }
     }
 
-    private func routingGeometryChanged(
+    private func bindingGeometryChanged(
         from previous: AnnotationElement?,
         to current: AnnotationElement?
     ) -> Bool {
         guard let previous, let current else {
-            return isRoutingRelevant(previous) || isRoutingRelevant(current)
+            return isBindingRelevant(previous) || isBindingRelevant(current)
         }
-        guard isRoutingRelevant(previous) || isRoutingRelevant(current) else {
+        guard isBindingRelevant(previous) || isBindingRelevant(current) else {
             return false
         }
         if previous.metadata.rotation != current.metadata.rotation
@@ -585,35 +494,17 @@ final class AnnotationScene {
         switch (previous.geometry, current.geometry) {
         case (.shape(let previousShape), .shape(let currentShape)):
             return previousShape != currentShape
-                || routingStyleChanged(from: previous.style, to: current.style)
         case (.linear(let previousLinear), .linear(let currentLinear)):
-            return linearRoutingGeometryChanged(
+            return linearBindingGeometryChanged(
                 from: previousLinear,
                 to: currentLinear
             )
-                || (
-                    isAutoRoutedElbow(previousLinear)
-                        || isAutoRoutedElbow(currentLinear)
-                )
-                && routingStyleChanged(from: previous.style, to: current.style)
         default:
             return previous.geometry != current.geometry
         }
     }
 
-    private func routingStyleChanged(
-        from previous: AnnotationStyle,
-        to current: AnnotationStyle
-    ) -> Bool {
-        previous.strokeWidth != current.strokeWidth
-            || previous.sloppiness != current.sloppiness
-    }
-
-    private func isAutoRoutedElbow(_ linear: AnnotationLinearGeometry) -> Bool {
-        linear.route == .elbow && linear.isElbowAutoRouted
-    }
-
-    private func isRoutingRelevant(_ element: AnnotationElement?) -> Bool {
+    private func isBindingRelevant(_ element: AnnotationElement?) -> Bool {
         guard let element else { return false }
         return switch element.geometry {
         case .shape, .linear:
@@ -623,7 +514,7 @@ final class AnnotationScene {
         }
     }
 
-    private func linearRoutingGeometryChanged(
+    private func linearBindingGeometryChanged(
         from previous: AnnotationLinearGeometry,
         to current: AnnotationLinearGeometry
     ) -> Bool {
@@ -631,55 +522,7 @@ final class AnnotationScene {
             || previous.route != current.route
             || previous.startBinding != current.startBinding
             || previous.endBinding != current.endBinding
-            || previous.startDirection != current.startDirection
-            || previous.endDirection != current.endDirection
-            || previous.isElbowAutoRouted != current.isElbowAutoRouted
             || previous.rotationPivot != current.rotationPivot
-    }
-
-    private func routingObstacleBounds(for element: AnnotationElement?) -> CGRect? {
-        guard let element,
-              element.metadata.isVisible,
-              case .shape = element.geometry else {
-            return nil
-        }
-        return AnnotationGeometry.worldBounds(of: element, includingStroke: true)
-    }
-
-    private func routeMayBeAffected(
-        _ linear: AnnotationLinearGeometry,
-        element: AnnotationElement,
-        changedShapeBounds: [(AnnotationElementID, CGRect)],
-        excluding boundTargetIDs: Set<AnnotationElementID>,
-        clearance: CGFloat
-    ) -> Bool {
-        guard !changedShapeBounds.isEmpty,
-              let first = linear.points.first,
-              let last = linear.points.last else {
-            return false
-        }
-        let routeBounds = bounds(of: linear.points)
-        let endpointBounds = CGRect(
-            x: min(first.x, last.x),
-            y: min(first.y, last.y),
-            width: abs(last.x - first.x),
-            height: abs(last.y - first.y)
-        )
-        let influenceBounds = routeBounds.union(endpointBounds)
-            .insetBy(dx: -clearance, dy: -clearance)
-        let inverseTransform = AnnotationGeometry.inverseWorldTransform(for: element)
-
-        return changedShapeBounds.contains { elementID, worldBounds in
-            guard !boundTargetIDs.contains(elementID), !worldBounds.isNull else {
-                return false
-            }
-            let localBounds = bounds(
-                of: AnnotationGeometry.rectCorners(worldBounds).map {
-                    $0.applying(inverseTransform)
-                }
-            )
-            return influenceBounds.intersects(localBounds)
-        }
     }
 
     private func updateCurvedEndpointControls(
@@ -700,63 +543,6 @@ final class AnnotationScene {
         linear.bezierControls[0].start = linear.bezierControls[0].start + startDelta
         linear.bezierControls[linear.bezierControls.count - 1].end =
             linear.bezierControls[linear.bezierControls.count - 1].end + endDelta
-    }
-
-    private func preserveManualElbowEndpoints(
-        _ linear: inout AnnotationLinearGeometry,
-        oldStart: CGPoint?,
-        oldEnd: CGPoint?
-    ) {
-        guard linear.points.count > 1, let oldStart, let oldEnd else { return }
-        let lastIndex = linear.points.count - 1
-        let startWasHorizontal = abs(originalDifference(
-            linear.points[1].y,
-            oldStart.y
-        )) <= abs(originalDifference(linear.points[1].x, oldStart.x))
-        if startWasHorizontal {
-            linear.points[1].y = linear.points[0].y
-        } else {
-            linear.points[1].x = linear.points[0].x
-        }
-
-        let endWasHorizontal = abs(originalDifference(
-            linear.points[lastIndex - 1].y,
-            oldEnd.y
-        )) <= abs(originalDifference(linear.points[lastIndex - 1].x, oldEnd.x))
-        if endWasHorizontal {
-            linear.points[lastIndex - 1].y = linear.points[lastIndex].y
-        } else {
-            linear.points[lastIndex - 1].x = linear.points[lastIndex].x
-        }
-    }
-
-    private func resolvedEndpointDirection(
-        stored: AnnotationEndpointDirection,
-        binding: AnnotationBinding?,
-        targets: [AnnotationElementID: AnnotationElement],
-        connectorRotation: CGFloat
-    ) -> AnnotationEndpointDirection {
-        guard let binding,
-              let target = targets[binding.targetElementID] else {
-            return stored
-        }
-        return AnnotationGeometry.routedEndpointDirection(
-            for: binding.side,
-            targetRotation: target.metadata.rotation,
-            connectorRotation: connectorRotation,
-            fallback: stored
-        )
-    }
-
-    private func bounds(of points: [CGPoint]) -> CGRect {
-        guard let first = points.first else { return .null }
-        return points.dropFirst().reduce(CGRect(origin: first, size: .zero)) {
-            $0.union(CGRect(origin: $1, size: .zero))
-        }
-    }
-
-    private func originalDifference(_ lhs: CGFloat, _ rhs: CGFloat) -> CGFloat {
-        lhs - rhs
     }
 
     private func sanitizeSelection() {

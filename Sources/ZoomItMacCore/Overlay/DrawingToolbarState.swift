@@ -592,8 +592,7 @@ enum DrawingInspectorPresentationPolicy {
     }
 }
 
-@MainActor
-struct DrawingToolbarState {
+struct DrawingToolbarState: Equatable {
     var currentTool: AnnotationTool
     var canUndo: Bool
     var canRedo: Bool
@@ -678,73 +677,12 @@ struct DrawingToolbarState {
         }
     }
 
-    var visibleInspectorSections: [DrawingInspectorSection] {
-        var sections = DrawingInspectorSectionMatrix.sections(
-            for: selectedElements,
-            currentTool: currentTool,
-            showsFill: showsFillOptions
-        )
-        if !supportsSmartDraw {
-            sections.removeAll { $0 == .smartDraw }
-        }
-        if smartDrawEnabled, selectedElements.isEmpty, currentTool == .pen {
-            sections.removeAll { $0 == .pressure }
-        }
-        return sections
-    }
+    // Store only presentation data. Retaining selected geometry here both copies
+    // growing strokes and makes a position-only drag appear to change the UI.
+    private(set) var visibleInspectorSections: [DrawingInspectorSection]
+    private(set) var strokeWidthOptions: [CGFloat]
 
-    var strokeWidthOptions: [CGFloat] {
-        if !selectedElements.isEmpty {
-            if selectedElements.allSatisfy({
-                guard case .freehand(let freehand) = $0.geometry else {
-                    return false
-                }
-                return freehand.isHighlighter
-            }) {
-                return DrawingInspectorControlMapping.highlighterStrokeWidths
-            }
-            if selectedElements.allSatisfy({
-                guard case .freehand(let freehand) = $0.geometry else {
-                    return false
-                }
-                return !freehand.isHighlighter
-            }) {
-                return DrawingInspectorControlMapping.penStrokeWidths
-            }
-            return DrawingInspectorControlMapping.strokeWidths
-        }
-        return switch currentTool {
-        case .pen:
-            DrawingInspectorControlMapping.penStrokeWidths
-        case .highlighter:
-            DrawingInspectorControlMapping.highlighterStrokeWidths
-        default:
-            DrawingInspectorControlMapping.strokeWidths
-        }
-    }
-
-    private var selectedElements: [AnnotationElement] = []
-
-    private var showsFillOptions: Bool {
-        switch fillStyle {
-        case .value(let fillStyle):
-            guard fillStyle != .none else { return false }
-            if case .value(let color) = fillColor {
-                return !color.isTransparent
-            }
-            return true
-        case .mixed:
-            return true
-        case .unavailable:
-            guard hasSelection else { return false }
-            return selectedElements.contains { element in
-                guard case .shape = element.geometry else { return false }
-                return element.style.fillStyle != .none
-                    && !element.style.fillColor.isTransparent
-            }
-        }
-    }
-
+    @MainActor
     init(annotationController: AnnotationController) {
         let selected = annotationController.selectedElementSnapshot
         let editableSelected = selected.filter { !$0.metadata.isLocked }
@@ -816,7 +754,7 @@ struct DrawingToolbarState {
             }
         }
 
-        selectedElements = editableSelected.isEmpty ? selected : editableSelected
+        let displayedElements = editableSelected.isEmpty ? selected : editableSelected
         currentTool = annotationController.currentTool
         canUndo = annotationController.canUndo
         canRedo = annotationController.canRedo
@@ -1034,6 +972,36 @@ struct DrawingToolbarState {
         showsLinearPointHandles = annotationController.linearPointDecorationElement != nil
         isConstructingLinearPath = annotationController.isConstructingLinearPath
         canFinishLinearPath = annotationController.canFinishLinearPath
+        let showsFill: Bool
+        switch fillStyle {
+        case .value(let style):
+            showsFill = style != .none && fillColor.value?.isTransparent != true
+        case .mixed:
+            showsFill = true
+        case .unavailable:
+            showsFill = displayedElements.contains {
+                guard case .shape = $0.geometry else { return false }
+                return $0.style.fillStyle != .none && !$0.style.fillColor.isTransparent
+            }
+        }
+        var sections = DrawingInspectorSectionMatrix.sections(
+            for: displayedElements, currentTool: currentTool, showsFill: showsFill
+        )
+        if !supportsSmartDraw { sections.removeAll { $0 == .smartDraw } }
+        if smartDrawEnabled, displayedElements.isEmpty, currentTool == .pen {
+            sections.removeAll { $0 == .pressure }
+        }
+        visibleInspectorSections = sections
+        let widthTools = displayedElements.isEmpty
+            ? [currentTool]
+            : displayedElements.map(DrawingInspectorSectionMatrix.tool(for:))
+        if widthTools.allSatisfy({ $0 == .highlighter }) {
+            strokeWidthOptions = DrawingInspectorControlMapping.highlighterStrokeWidths
+        } else if widthTools.allSatisfy({ $0 == .pen }) {
+            strokeWidthOptions = DrawingInspectorControlMapping.penStrokeWidths
+        } else {
+            strokeWidthOptions = DrawingInspectorControlMapping.strokeWidths
+        }
     }
 }
 

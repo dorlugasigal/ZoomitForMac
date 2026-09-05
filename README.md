@@ -55,7 +55,9 @@ swift run ZoomItMacSelfTest
 swift run ZoomIt
 ```
 
-The self-test covers viewport math, annotation lifecycle/rendering, settings persistence, and panorama stitcher regressions.
+The self-test covers viewport math, annotation lifecycle/rendering, settings persistence, and panorama stitcher regressions. UI tests require an unlocked macOS desktop.
+
+For drawing and dragging performance diagnostics, run `swift run -c release ZoomItMacSelfTest --bench-drawing`.
 
 Run the sandbox product-surface tests with the App Store compiler condition:
 

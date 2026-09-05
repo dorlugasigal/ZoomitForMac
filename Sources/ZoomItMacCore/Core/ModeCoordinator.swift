@@ -504,10 +504,6 @@ final class ModeCoordinator {
             annotationController.setTextColor(color)
             overlayController.requestRedraw()
             shouldRememberDrawingStyle = true
-        case .setFillColor(let color):
-            annotationController.setFillColor(color)
-            overlayController.requestRedraw()
-            shouldRememberDrawingStyle = true
         case .setShapeBackground(let color):
             annotationController.setShapeBackground(color)
             overlayController.requestRedraw()
@@ -532,35 +528,19 @@ final class ModeCoordinator {
             annotationController.setOpacity(opacity)
             overlayController.requestRedraw()
             shouldRememberDrawingStyle = true
-        case .setTextOpacity(let opacity):
-            annotationController.setTextOpacity(opacity)
-            overlayController.requestRedraw()
-            shouldRememberDrawingStyle = true
         case .beginContinuousStyleEdit(let owner):
             annotationController.beginContinuousStyleEdit(owner: owner)
         case .endContinuousStyleEdit(let owner):
             shouldRememberDrawingStyle =
                 annotationController.endContinuousStyleEdit(owner: owner)
-        case .setPressureEnabled(let isEnabled):
-            annotationController.setPressureEnabled(isEnabled)
-            overlayController.requestRedraw()
-            shouldRememberDrawingStyle = true
         case .setPressureMode(let mode):
             annotationController.setPressureMode(mode)
-            overlayController.requestRedraw()
-            shouldRememberDrawingStyle = true
-        case .setSmoothingEnabled(let isEnabled):
-            annotationController.setSmoothingEnabled(isEnabled)
             overlayController.requestRedraw()
             shouldRememberDrawingStyle = true
         case .setSmartDrawEnabled(let isEnabled):
             annotationController.setSmartDrawEnabled(isEnabled)
             persistSmartDrawEnabled(isEnabled)
             overlayController.requestRedraw()
-        case .setRoundness(let roundness):
-            annotationController.setRoundness(roundness)
-            overlayController.requestRedraw()
-            shouldRememberDrawingStyle = true
         case .setEdgeStyle(let edgeStyle):
             annotationController.setEdgeStyle(edgeStyle)
             overlayController.requestRedraw()

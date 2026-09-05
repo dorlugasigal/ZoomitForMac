@@ -115,6 +115,9 @@ final class DrawingInspectorView: NSVisualEffectView {
         state: DrawingToolbarState,
         contentSize: CGSize
     ) {
+        guard propertiesContentSize != contentSize || previousContext != state.inspectorContext else {
+            return
+        }
         propertiesContentSize = contentSize
         shouldResetScrollPosition =
             DrawingInspectorPresentationPolicy.shouldResetScroll(
