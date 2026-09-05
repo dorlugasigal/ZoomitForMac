@@ -8,6 +8,13 @@ final class DrawingPropertiesController: NSViewController {
     private var isUpdating = false
     private var sections: [DrawingInspectorSection: NSStackView] = [:]
     private var sectionWidthConstraints: [DrawingInspectorSection: NSLayoutConstraint] = [:]
+    private var compactableHorizontalStacks: [NSStackView] = []
+    private var currentSectionLayout =
+        DrawingInspectorSectionMatrix.DrawingToolbarHorizontalSectionLayout(
+            rows: [],
+            rowWidths: [],
+            documentWidth: 1
+        )
     private var availableHorizontalWidth =
         DrawingInspectorVisualMetrics.attachedMaximumWidth
             - DrawingInspectorVisualMetrics.attachedHorizontalChrome
@@ -229,6 +236,7 @@ final class DrawingPropertiesController: NSViewController {
         )
         view = root
 
+        registerCompactableHorizontalStacks()
         configureSections(in: root)
         emptyStateLabel.textColor = .secondaryLabelColor
         emptyStateLabel.maximumNumberOfLines = 3
@@ -379,9 +387,18 @@ final class DrawingPropertiesController: NSViewController {
         updatePreferredContentSize()
         return sections.reduce(into: [:]) { result, entry in
             if !entry.value.isHidden {
-                result[entry.key] = entry.value.frame
+                result[entry.key] = entry.value.convert(
+                    entry.value.bounds,
+                    to: view
+                )
             }
         }
+    }
+
+    var sectionLayoutForTesting:
+        DrawingInspectorSectionMatrix.DrawingToolbarHorizontalSectionLayout {
+        _ = view
+        return currentSectionLayout
     }
 
     private func configureControlActions() {
@@ -565,6 +582,25 @@ final class DrawingPropertiesController: NSViewController {
         )
     }
 
+    private func registerCompactableHorizontalStacks() {
+        compactableHorizontalStacks = [
+            strokeSwatches,
+            backgroundSwatches,
+            fillPalette,
+            widthPalette,
+            strokeStylePalette,
+            sloppinessPalette,
+            pressurePalette,
+            edgePalette,
+            routePalette,
+            arrowheadSizePalette,
+            textFontPalette,
+            textSizePalette,
+            textAlignmentPalette,
+            arrangeButtons
+        ]
+    }
+
     private func addSection(
         _ section: DrawingInspectorSection,
         title: String,
@@ -608,7 +644,7 @@ final class DrawingPropertiesController: NSViewController {
         )
         colorWell.target = self
         colorWell.action = colorWellAction
-        colorWell.colorWellStyle = .minimal
+        colorWell.colorWellStyle = .default
         colorWell.defaultToolTip = "Choose a custom \(roleLabel.lowercased()) color"
         colorWell.toolTip = colorWell.defaultToolTip
         colorWell.setAccessibilityLabel("Custom \(roleLabel.lowercased()) color")
@@ -688,22 +724,35 @@ final class DrawingPropertiesController: NSViewController {
 
     @objc private func setStrokePreset(_ sender: DrawingColorSwatchButton) {
         guard !isUpdating, case .palette(let color) = sender.value else { return }
-        commandSink(.setStrokeColor(.palette(color)))
+        colorPickerCoordinator.synchronizeActiveColor(
+            color.nsColor,
+            from: strokeColorWell
+        )
+        commandSink(primaryColorCommand(.palette(color)))
     }
 
     @objc private func setBackgroundPreset(_ sender: DrawingColorSwatchButton) {
         guard !isUpdating else { return }
         switch sender.value {
         case .transparent:
+            colorPickerCoordinator.synchronizeActiveColor(
+                .clear,
+                from: backgroundColorWell
+            )
             commandSink(.setShapeBackground(nil))
         case .palette(let color):
+            colorPickerCoordinator.synchronizeActiveColor(
+                color.nsColor,
+                from: backgroundColorWell
+            )
             commandSink(.setShapeBackground(.palette(color)))
         }
     }
 
     @objc private func setStrokeColor(_ sender: NSColorWell) {
         guard !isUpdating else { return }
-        commandSink(.setStrokeColor(Self.colorValue(sender.color)))
+        let channel = (sender as? DrawingContinuousColorWell)?.pickerChannel ?? .stroke
+        commandSink(colorCommand(Self.colorValue(sender.color), for: channel))
     }
 
     @objc private func setBackgroundColor(_ sender: NSColorWell) {
@@ -794,6 +843,7 @@ final class DrawingPropertiesController: NSViewController {
             colorWell.isSelected = false
             colorWell.isMixed = false
         }
+        colorPickerCoordinator.synchronizeActiveColor(from: colorWell)
     }
 
     private func updateOpacity(
@@ -808,19 +858,29 @@ final class DrawingPropertiesController: NSViewController {
 
     private func updatePreferredContentSize() {
         guard let root = view as? NSStackView else { return }
-        let layout = DrawingInspectorSectionMatrix
-            .DrawingToolbarHorizontalSectionPacker.layout(
-            sections: latestState?.visibleInspectorSections ?? [],
-            availableWidth: availableHorizontalWidth
+        root.frame.size = CGSize(
+            width: currentSectionLayout.documentWidth,
+            height: 1
         )
-        root.frame.size.width = layout.documentWidth
         root.layoutSubtreeIfNeeded()
-        let fittingHeight = ceil(root.fittingSize.height)
+        let arrangedSubviews = root.arrangedSubviews.filter { !$0.isHidden }
+        let fittingHeight = ceil(
+            root.edgeInsets.top
+                + root.edgeInsets.bottom
+                + arrangedSubviews.reduce(CGFloat.zero) { result, subview in
+                    subview.layoutSubtreeIfNeeded()
+                    return result + subview.fittingSize.height
+                }
+                + CGFloat(max(0, arrangedSubviews.count - 1)) * root.spacing
+        )
         root.frame.size.height = fittingHeight.isFinite
             ? min(max(fittingHeight, 1), 10_000)
             : 1
         root.layoutSubtreeIfNeeded()
-        preferredContentSize = root.frame.size
+        preferredContentSize = CGSize(
+            width: currentSectionLayout.documentWidth,
+            height: root.frame.height
+        )
     }
 
     private func rebuildSectionLayout() {
@@ -835,16 +895,19 @@ final class DrawingPropertiesController: NSViewController {
         }
 
         let visibleSections = latestState?.visibleInspectorSections ?? []
+        compactSectionContents(to: availableHorizontalWidth)
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = DrawingInspectorVisualMetrics.attachedRowSpacing
         root.edgeInsets = .init(top: 8, left: 0, bottom: 8, right: 0)
-        let layout = DrawingInspectorSectionMatrix
+        let sectionWidths = measuredSectionWidths(for: visibleSections)
+        currentSectionLayout = DrawingInspectorSectionMatrix
             .DrawingToolbarHorizontalSectionPacker.layout(
             sections: visibleSections,
-            availableWidth: availableHorizontalWidth
+            availableWidth: availableHorizontalWidth,
+            sectionWidths: sectionWidths
         )
-        for rowSections in layout.rows {
+        for rowSections in currentSectionLayout.rows {
             let row = NSStackView()
             row.orientation = .horizontal
             row.alignment = .top
@@ -853,8 +916,10 @@ final class DrawingPropertiesController: NSViewController {
                 guard let sectionView = sections[section] else { continue }
                 sectionView.isHidden = false
                 let constraint = sectionView.widthAnchor.constraint(
-                    equalToConstant: DrawingInspectorSectionMatrix
-                        .DrawingToolbarHorizontalSectionPacker.sectionWidth(section)
+                    equalToConstant: min(
+                        sectionWidths[section] ?? 1,
+                        availableHorizontalWidth
+                    )
                 )
                 constraint.isActive = true
                 sectionWidthConstraints[section] = constraint
@@ -863,6 +928,32 @@ final class DrawingPropertiesController: NSViewController {
             root.addArrangedSubview(row)
         }
         emptyStateLabel.isHidden = true
+    }
+
+    private func compactSectionContents(to availableWidth: CGFloat) {
+        for stack in compactableHorizontalStacks {
+            stack.orientation = .horizontal
+            stack.alignment = .centerY
+        }
+        for stack in compactableHorizontalStacks {
+            stack.layoutSubtreeIfNeeded()
+            if ceil(stack.fittingSize.width) > availableWidth {
+                stack.orientation = .vertical
+                stack.alignment = .leading
+            }
+        }
+    }
+
+    private func measuredSectionWidths(
+        for visibleSections: [DrawingInspectorSection]
+    ) -> [DrawingInspectorSection: CGFloat] {
+        Dictionary(
+            uniqueKeysWithValues: visibleSections.compactMap { section in
+                guard let sectionView = sections[section] else { return nil }
+                sectionView.layoutSubtreeIfNeeded()
+                return (section, max(1, ceil(sectionView.fittingSize.width)))
+            }
+        )
     }
 
     private func display<Value>(
@@ -880,6 +971,8 @@ final class DrawingPropertiesController: NSViewController {
         let label = NSTextField(labelWithString: title)
         label.font = .systemFont(ofSize: 11, weight: .semibold)
         label.textColor = .secondaryLabelColor
+        label.lineBreakMode = .byWordWrapping
+        label.maximumNumberOfLines = 2
         label.setContentHuggingPriority(.required, for: .vertical)
         label.setContentCompressionResistancePriority(.required, for: .vertical)
         label.heightAnchor.constraint(greaterThanOrEqualToConstant: 14).isActive = true
@@ -892,6 +985,7 @@ final class DrawingPropertiesController: NSViewController {
         row.alignment = .centerY
         row.spacing = 8
         row.detachesHiddenViews = true
+        compactableHorizontalStacks.append(row)
         return row
     }
 
@@ -903,6 +997,7 @@ final class DrawingPropertiesController: NSViewController {
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 8
+        compactableHorizontalStacks.append(row)
         return row
     }
 
@@ -914,6 +1009,24 @@ final class DrawingPropertiesController: NSViewController {
             blue: converted.blueComponent,
             alpha: converted.alphaComponent
         )
+    }
+
+    private func primaryColorCommand(_ color: AnnotationColorValue) -> AppCommand {
+        colorCommand(color, for: strokeColorWell.pickerChannel)
+    }
+
+    private func colorCommand(
+        _ color: AnnotationColorValue,
+        for channel: DrawingColorPickerChannel
+    ) -> AppCommand {
+        switch channel {
+        case .stroke:
+            .setStrokeColor(color)
+        case .background:
+            .setShapeBackground(color)
+        case .text:
+            .setTextColor(color)
+        }
     }
 
 }
@@ -1067,12 +1180,82 @@ struct DrawingColorPickerCoordinatorState: Equatable {
 }
 
 @MainActor
-final class DrawingColorPickerCoordinator {
+private struct DrawingSharedColorPanelState {
+    let parent: NSWindow?
+    let level: NSWindow.Level
+    let sharingType: NSWindow.SharingType
+    let isVisible: Bool
+    let isContinuous: Bool
+    let showsAlpha: Bool
+
+    init(panel: NSColorPanel) {
+        parent = panel.parent
+        level = panel.level
+        sharingType = panel.sharingType
+        isVisible = panel.isVisible
+        isContinuous = panel.isContinuous
+        showsAlpha = panel.showsAlpha
+    }
+
+    func restore(_ panel: NSColorPanel, panelIsClosing: Bool) {
+        panel.isContinuous = isContinuous
+        panel.showsAlpha = showsAlpha
+        if panel.parent !== parent {
+            panel.parent?.removeChildWindow(panel)
+            parent?.addChildWindow(panel, ordered: .above)
+        }
+        panel.level = level
+        panel.sharingType = sharingType
+        if isVisible {
+            if panelIsClosing {
+                DispatchQueue.main.async {
+                    panel.orderFront(nil)
+                }
+            } else {
+                panel.orderFront(nil)
+            }
+        } else if !panelIsClosing {
+            panel.orderOut(nil)
+        }
+    }
+}
+
+private final class DrawingColorPanelObservers: @unchecked Sendable {
+    let closeObserver: NSObjectProtocol
+    let colorObserver: NSObjectProtocol
+
+    init(
+        closeObserver: NSObjectProtocol,
+        colorObserver: NSObjectProtocol
+    ) {
+        self.closeObserver = closeObserver
+        self.colorObserver = colorObserver
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(closeObserver)
+        NotificationCenter.default.removeObserver(colorObserver)
+    }
+}
+
+@MainActor
+final class DrawingColorPickerCoordinator: NSObject {
+    private struct PanelSession {
+        let panel: NSColorPanel
+        let previousState: DrawingSharedColorPanelState
+    }
+
     private let onBeginTransaction: () -> Void
     private let onEndTransaction: () -> Void
     private let onActivityChanged: (Bool) -> Void
     private var state = DrawingColorPickerCoordinatorState()
     private weak var activeWell: DrawingContinuousColorWell?
+    private var panelSession: PanelSession?
+    private var panelObservers: DrawingColorPanelObservers?
+    private var isSynchronizingPanelColor = false
+    private var suppressesNextPanelNotification = false
+    private var synchronizedPanelColor: NSColor?
+    private var lastDispatchedPanelColor: NSColor?
 
     var stateSnapshot: DrawingColorPickerCoordinatorState {
         state
@@ -1086,6 +1269,7 @@ final class DrawingColorPickerCoordinator {
         self.onBeginTransaction = onBeginTransaction
         self.onEndTransaction = onEndTransaction
         self.onActivityChanged = onActivityChanged
+        super.init()
     }
 
     fileprivate func prepareActivation(
@@ -1111,26 +1295,150 @@ final class DrawingColorPickerCoordinator {
         onActivityChanged(true)
     }
 
+    fileprivate func presentColorPanel(for well: DrawingContinuousColorWell) {
+        let panel = NSColorPanel.shared
+        if panelSession == nil {
+            let previousState = DrawingSharedColorPanelState(panel: panel)
+            let closeObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: panel,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.finishColorPanelSession(panelIsClosing: true)
+                }
+            }
+            let colorObserver = NotificationCenter.default.addObserver(
+                forName: NSColorPanel.colorDidChangeNotification,
+                object: panel,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.colorPanelColorDidChange(NSColorPanel.shared)
+                }
+            }
+            panelSession = PanelSession(
+                panel: panel,
+                previousState: previousState
+            )
+            panelObservers = DrawingColorPanelObservers(
+                closeObserver: closeObserver,
+                colorObserver: colorObserver
+            )
+            panel.isContinuous = true
+            panel.showsAlpha = true
+            panel.sharingType = .none
+        }
+
+        if let ownerWindow = well.window {
+            if panel.parent !== ownerWindow {
+                panel.parent?.removeChildWindow(panel)
+                ownerWindow.addChildWindow(panel, ordered: .above)
+            }
+            panel.level = NSWindow.Level(rawValue: ownerWindow.level.rawValue + 1)
+        }
+        synchronizePanelColor(well.color)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
     fileprivate func switchChannel(
         to channel: DrawingColorPickerChannel,
         well: DrawingContinuousColorWell
     ) {
         guard activeWell === well else { return }
         _ = state.activate(channel)
+        synchronizePanelColor(well.color)
     }
 
-    fileprivate func colorWellDidDeactivate(
-        _ well: DrawingContinuousColorWell,
-        channel: DrawingColorPickerChannel
+    fileprivate func synchronizeActiveColor(from well: DrawingContinuousColorWell) {
+        synchronizeActiveColor(well.color, from: well)
+    }
+
+    fileprivate func synchronizeActiveColor(
+        _ color: NSColor,
+        from well: DrawingContinuousColorWell
     ) {
-        guard activeWell === well, state.deactivate(channel) else { return }
-        activeWell = nil
-        onEndTransaction()
-        onActivityChanged(false)
+        guard activeWell === well, panelSession != nil else { return }
+        synchronizePanelColor(color)
     }
 
     func dismiss() {
-        guard state.transactionActive else { return }
+        guard state.transactionActive || panelSession != nil else { return }
+        finishColorPanelSession(panelIsClosing: false)
+    }
+
+    private func colorPanelColorDidChange(_ panel: NSColorPanel) {
+        guard !isSynchronizingPanelColor else { return }
+        if suppressesNextPanelNotification {
+            suppressesNextPanelNotification = false
+            return
+        }
+        let color = panel.color
+        if let synchronizedPanelColor,
+           Self.colorsMatch(color, synchronizedPanelColor) {
+            self.synchronizedPanelColor = nil
+            return
+        }
+        synchronizedPanelColor = nil
+        guard let activeWell,
+              !Self.colorsMatch(color, lastDispatchedPanelColor) else {
+            return
+        }
+        activeWell.color = color
+        lastDispatchedPanelColor = color
+        guard let action = activeWell.action else { return }
+        _ = activeWell.sendAction(action, to: activeWell.target)
+    }
+
+    private func synchronizePanelColor(_ color: NSColor) {
+        guard let panel = panelSession?.panel else { return }
+        guard !Self.colorsMatch(panel.color, color) else {
+            lastDispatchedPanelColor = panel.color
+            synchronizedPanelColor = nil
+            return
+        }
+        isSynchronizingPanelColor = true
+        suppressesNextPanelNotification = true
+        panel.color = color
+        isSynchronizingPanelColor = false
+        lastDispatchedPanelColor = panel.color
+        synchronizedPanelColor = panel.color
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  let synchronizedPanelColor = self.synchronizedPanelColor,
+                  Self.colorsMatch(synchronizedPanelColor, color) else {
+                return
+            }
+            self.synchronizedPanelColor = nil
+            self.suppressesNextPanelNotification = false
+        }
+    }
+
+    private static func colorsMatch(_ lhs: NSColor?, _ rhs: NSColor?) -> Bool {
+        guard let lhs, let rhs else { return lhs == nil && rhs == nil }
+        guard let left = lhs.usingColorSpace(.sRGB),
+              let right = rhs.usingColorSpace(.sRGB) else {
+            return lhs.isEqual(rhs)
+        }
+        return abs(left.redComponent - right.redComponent) < 0.000_001
+            && abs(left.greenComponent - right.greenComponent) < 0.000_001
+            && abs(left.blueComponent - right.blueComponent) < 0.000_001
+            && abs(left.alphaComponent - right.alphaComponent) < 0.000_001
+    }
+
+    private func finishColorPanelSession(panelIsClosing: Bool) {
+        if let panelSession {
+            panelObservers = nil
+            self.panelSession = nil
+            panelSession.previousState.restore(
+                panelSession.panel,
+                panelIsClosing: panelIsClosing
+            )
+        }
+        synchronizedPanelColor = nil
+        lastDispatchedPanelColor = nil
+        isSynchronizingPanelColor = false
+        suppressesNextPanelNotification = false
         activeWell?.deactivateFromCoordinator()
         activeWell = nil
         guard state.close() else { return }
@@ -1154,13 +1462,17 @@ private final class DrawingContinuousColorWell: NSColorWell {
     private weak var coordinator: DrawingColorPickerCoordinator?
     private var channel: DrawingColorPickerChannel = .stroke
     private var activeChannel: DrawingColorPickerChannel?
+    private var isPickerPresented = false
     private var trackingAreaReference: NSTrackingArea?
     private var isPointerInside = false
     private var isPressed = false
+    var pickerChannel: DrawingColorPickerChannel { channel }
+    override var isActive: Bool { isPickerPresented }
     override var alignmentRectInsets: NSEdgeInsets {
         NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
     }
     override var allowsVibrancy: Bool { false }
+    override var mouseDownCanMoveWindow: Bool { false }
 
     private var resolvedDrawingAppearance: DrawingResolvedControlAppearance {
         DrawingControlAppearanceResolver.resolve(
@@ -1204,29 +1516,29 @@ private final class DrawingContinuousColorWell: NSColorWell {
     }
 
     override func activate(_ exclusive: Bool) {
+        if !NSApp.isActive {
+            NSApp.activate(ignoringOtherApps: true)
+        }
         guard let coordinator else {
-            super.activate(exclusive)
             return
         }
         let activation = coordinator.prepareActivation(
             channel: channel,
             well: self
         )
-        if activation == .unchanged, isActive {
+        if activation == .unchanged, isPickerPresented {
             return
         }
         activeChannel = channel
-        super.activate(exclusive)
+        isPickerPresented = true
         isSelected = true
+        coordinator.presentColorPanel(for: self)
         coordinator.completeActivation(activation, well: self)
     }
 
     override func deactivate() {
-        super.deactivate()
-        isSelected = false
-        guard let activeChannel else { return }
-        self.activeChannel = nil
-        coordinator?.colorWellDidDeactivate(self, channel: activeChannel)
+        guard isPickerPresented else { return }
+        coordinator?.dismiss()
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
@@ -1258,13 +1570,14 @@ private final class DrawingContinuousColorWell: NSColorWell {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard isEnabled, event.type == .leftMouseDown else { return }
         isPressed = true
         updateAppearance()
         defer {
             isPressed = false
             updateAppearance()
         }
-        super.mouseDown(with: event)
+        activate(true)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -1333,9 +1646,7 @@ private final class DrawingContinuousColorWell: NSColorWell {
     }
 
     fileprivate func deactivateFromCoordinator() {
-        if isActive {
-            super.deactivate()
-        }
+        isPickerPresented = false
         activeChannel = nil
         isSelected = false
     }

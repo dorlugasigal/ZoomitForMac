@@ -33,24 +33,12 @@ final class DrawingInspectorView: NSVisualEffectView {
         scrollView.hasHorizontalScroller = false
         scrollView.hasVerticalScroller = false
         scrollView.scrollerStyle = .overlay
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.translatesAutoresizingMaskIntoConstraints = true
+        scrollView.autoresizingMask = []
         propertiesView.translatesAutoresizingMaskIntoConstraints = true
         propertiesView.autoresizingMask = []
         scrollView.documentView = propertiesView
         addSubview(scrollView)
-
-        NSLayoutConstraint.activate([
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            scrollView.topAnchor.constraint(
-                equalTo: topAnchor,
-                constant: DrawingInspectorVisualMetrics.attachedVerticalInset
-            ),
-            scrollView.bottomAnchor.constraint(
-                equalTo: bottomAnchor,
-                constant: -DrawingInspectorVisualMetrics.attachedVerticalInset
-            )
-        ])
     }
 
     required init?(coder: NSCoder) {
@@ -91,12 +79,23 @@ final class DrawingInspectorView: NSVisualEffectView {
 
     override func layout() {
         super.layout()
+        scrollView.frame = CGRect(
+            x: 12,
+            y: DrawingInspectorVisualMetrics.attachedVerticalInset,
+            width: max(
+                0,
+                bounds.width - DrawingInspectorVisualMetrics.attachedHorizontalChrome
+            ),
+            height: max(
+                0,
+                bounds.height - DrawingInspectorVisualMetrics.attachedVerticalInset * 2
+            )
+        )
         let documentSize = DrawingInspectorDocumentLayout.documentSize(
             contentSize: propertiesContentSize,
             viewportSize: scrollView.contentSize
         )
-        scrollView.hasHorizontalScroller =
-            documentSize.width > scrollView.contentSize.width
+        scrollView.hasHorizontalScroller = false
         propertiesView.frame = CGRect(origin: .zero, size: documentSize)
         propertiesView.layoutSubtreeIfNeeded()
         let origin = DrawingInspectorDocumentLayout.clampedScrollOrigin(
@@ -131,6 +130,18 @@ final class DrawingInspectorView: NSVisualEffectView {
         false
     }
 
+    var hasHorizontalScrollerForTesting: Bool {
+        scrollView.hasHorizontalScroller
+    }
+
+    var documentSizeForTesting: CGSize {
+        propertiesView.frame.size
+    }
+
+    var viewportSizeForTesting: CGSize {
+        scrollView.contentSize
+    }
+
     private func updateCardAppearance() {
         layer?.backgroundColor = DrawingColorSwatchAppearance.panelBackground(
             for: effectiveAppearance
@@ -142,7 +153,10 @@ final class DrawingInspectorView: NSVisualEffectView {
 enum DrawingInspectorDocumentLayout {
     static func documentSize(contentSize: CGSize, viewportSize: CGSize) -> CGSize {
         CGSize(
-            width: max(contentSize.width, viewportSize.width),
+            width: min(
+                max(1, contentSize.width),
+                max(1, viewportSize.width)
+            ),
             height: max(1, contentSize.height)
         )
     }
@@ -153,14 +167,11 @@ enum DrawingInspectorDocumentLayout {
         viewportSize: CGSize,
         resetsToOrigin: Bool
     ) -> CGPoint {
-        guard !resetsToOrigin else { return .zero }
-        return CGPoint(
-            x: min(
-                max(0, origin.x),
-                max(0, documentSize.width - viewportSize.width)
-            ),
-            y: 0
-        )
+        _ = origin
+        _ = documentSize
+        _ = viewportSize
+        _ = resetsToOrigin
+        return .zero
     }
 }
 

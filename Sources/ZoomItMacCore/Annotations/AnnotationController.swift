@@ -83,7 +83,6 @@ final class AnnotationController {
     private(set) var currentEndArrowhead: AnnotationArrowhead = .none
     private(set) var currentArrowheadSize: AnnotationArrowheadSize = .medium
     private(set) var smartDrawEnabled = false
-    private(set) var keepsToolActive = true
     var onStateChanged: (() -> Void)?
 
     init(elements: [AnnotationElement] = []) {
@@ -549,7 +548,6 @@ final class AnnotationController {
         currentEndArrowhead = .none
         currentArrowheadSize = .medium
         smartDrawEnabled = false
-        keepsToolActive = true
         typingFontSize = AnnotationController.defaultFontSize
         typingTextAlignment = .left
         lastNotifiedSmartDrawStatusText = smartDrawStatusText
@@ -1866,22 +1864,6 @@ final class AnnotationController {
             resetSmartDrawStroke()
         }
         lastNotifiedSmartDrawStatusText = smartDrawStatusText
-        onStateChanged?()
-    }
-
-    func setKeepsToolActive(_ keepsToolActive: Bool) {
-        guard self.keepsToolActive != keepsToolActive else { return }
-        self.keepsToolActive = keepsToolActive
-        onStateChanged?()
-    }
-
-    func completeToolUseIfNeeded() {
-        guard !keepsToolActive,
-              currentTool != .select,
-              currentTool != .hand else {
-            return
-        }
-        currentTool = .select
         onStateChanged?()
     }
 

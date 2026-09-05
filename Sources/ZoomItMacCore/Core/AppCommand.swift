@@ -36,7 +36,6 @@ enum AppCommand: Equatable {
     case setPressureMode(AnnotationPressureMode)
     case setSmoothingEnabled(Bool)
     case setSmartDrawEnabled(Bool)
-    case setKeepToolActive(Bool)
     case setRoundness(CGFloat?)
     case setEdgeStyle(AnnotationEdgeStyle)
     case setTextFontPreset(AnnotationTextFontPreset)

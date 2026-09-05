@@ -228,6 +228,8 @@ final class ZoomCanvasView: NSView {
     private let drawingModeDidChange: (Bool) -> Void
     private let transientToolDidChange: (AnnotationTool?) -> Void
     private let modalPresentationDidChange: (Bool) -> Void
+    private let captureCompositor:
+        (CGImage, CGRect, CGRect, CGSize) -> CGImage?
     private var latestCursorLocation: CGPoint?
     private var pointerViewPoint: CGPoint = .zero
     private var mouseLocationOverrideForTesting: CGPoint?
@@ -351,7 +353,21 @@ final class ZoomCanvasView: NSView {
         commandSink: @escaping (AppCommand) -> Void,
         drawingModeDidChange: @escaping (Bool) -> Void = { _ in },
         transientToolDidChange: @escaping (AnnotationTool?) -> Void = { _ in },
-        modalPresentationDidChange: @escaping (Bool) -> Void = { _ in }
+        modalPresentationDidChange: @escaping (Bool) -> Void = { _ in },
+        captureCompositor: @escaping
+            (CGImage, CGRect, CGRect, CGSize) -> CGImage? = {
+                baseImage,
+                displayFrame,
+                sourceRegion,
+                outputPixelSize in
+                CaptureAccessoryCompositor.compose(
+                    baseImage: baseImage,
+                    displayFrame: displayFrame,
+                    sourceRegion: sourceRegion,
+                    outputPixelSize: outputPixelSize,
+                    accessories: []
+                )
+            }
     ) {
         self.capturedFrame = capturedFrame
         self.viewportController = viewportController
@@ -362,6 +378,7 @@ final class ZoomCanvasView: NSView {
         self.drawingModeDidChange = drawingModeDidChange
         self.transientToolDidChange = transientToolDidChange
         self.modalPresentationDidChange = modalPresentationDidChange
+        self.captureCompositor = captureCompositor
         super.init(frame: frameRect)
         // Anchor the initial zoom on the current cursor position so the view
         // does not jump when the mouse first moves after the hotkey activates.
@@ -832,9 +849,6 @@ final class ZoomCanvasView: NSView {
                 )
             }
             restoreMouseCoalescingIfNeeded()
-            if !annotationController.isConstructingLinearPath {
-                annotationController.completeToolUseIfNeeded()
-            }
             isStroking = false
             activeStrokeTool = nil
             linearPointerGesture = nil
@@ -966,9 +980,7 @@ final class ZoomCanvasView: NSView {
                 return
             }
             if event.keyCode == 36 || event.keyCode == 76 {
-                if annotationController.finishLinearConstruction(commitPreview: true) {
-                    annotationController.completeToolUseIfNeeded()
-                }
+                _ = annotationController.finishLinearConstruction(commitPreview: true)
                 updateLinearFinishHandleHover()
                 applyCursorPolicy()
                 needsDisplay = true
@@ -2379,7 +2391,9 @@ final class ZoomCanvasView: NSView {
 
     /// Snapshots exactly what the overlay is displaying (magnified image plus
     /// annotations) at the view's backing resolution.
-    private func captureViewportImage(policy: ZoomCanvasCapturePolicy) -> CGImage? {
+    private func captureCanonicalViewportImage(
+        policy: ZoomCanvasCapturePolicy
+    ) -> CGImage? {
         let previousPolicy = capturePolicy
         let previousTailHidden = immediateFreehandTailLayer.isHidden
         let previousPointerHidden = immediateFreehandPointerLayer.isHidden
@@ -2399,6 +2413,45 @@ final class ZoomCanvasView: NSView {
         return rep.cgImage
     }
 
+    private func captureViewportImage(
+        policy: ZoomCanvasCapturePolicy,
+        sourceRect: CGRect? = nil,
+        outputPixelSize: CGSize? = nil
+    ) -> CGImage? {
+        displayIfNeeded()
+        guard let baseImage = captureCanonicalViewportImage(policy: policy) else {
+            return nil
+        }
+        let source = sourceRect ?? bounds
+        let resolvedOutputSize = outputPixelSize
+            ?? naturalOutputPixelSize(
+                baseImage: baseImage,
+                sourceRect: source
+            )
+        return captureCompositor(
+            baseImage,
+            capturedFrame.display.frame,
+            source,
+            resolvedOutputSize
+        )
+    }
+
+    private func naturalOutputPixelSize(
+        baseImage: CGImage,
+        sourceRect: CGRect
+    ) -> CGSize {
+        let scaleX = bounds.width > 0
+            ? CGFloat(baseImage.width) / bounds.width
+            : capturedFrame.display.scaleFactor
+        let scaleY = bounds.height > 0
+            ? CGFloat(baseImage.height) / bounds.height
+            : capturedFrame.display.scaleFactor
+        return CGSize(
+            width: max(1, (sourceRect.width * scaleX).rounded()),
+            height: max(1, (sourceRect.height * scaleY).rounded())
+        )
+    }
+
     private func setImmediateFreehandLayersHidden(_ hidden: Bool) {
         setImmediateFreehandLayersHidden(tail: hidden, pointer: hidden)
     }
@@ -2416,19 +2469,27 @@ final class ZoomCanvasView: NSView {
 
     /// Snapshots the visible overlay for the recorder. `sourceRect` is a region
     /// recording crop in display points with a top-left origin.
-    func captureRecordingImage(sourceRect: CGRect?) -> CGImage? {
-        displayIfNeeded()
-        guard let image = captureViewportImage(policy: .recording) else { return nil }
-        guard let sourceRect else { return image }
+    func captureRecordingImage(
+        sourceRect: CGRect?,
+        outputPixelSize: CGSize
+    ) -> CGImage? {
+        captureViewportImage(
+            policy: .recording,
+            sourceRect: sourceRect,
+            outputPixelSize: outputPixelSize
+        )
+    }
 
-        let scale = window?.backingScaleFactor ?? capturedFrame.display.scaleFactor
-        let pixelRect = CGRect(
-            x: sourceRect.minX * scale,
-            y: sourceRect.minY * scale,
-            width: sourceRect.width * scale,
-            height: sourceRect.height * scale
-        ).integral
-        return image.cropping(to: pixelRect)
+    func captureImageForTesting(
+        policy: ZoomCanvasCapturePolicy,
+        sourceRect: CGRect?,
+        outputPixelSize: CGSize?
+    ) -> CGImage? {
+        captureViewportImage(
+            policy: policy,
+            sourceRect: sourceRect,
+            outputPixelSize: outputPixelSize
+        )
     }
 
     // MARK: - Region snip
@@ -2467,23 +2528,17 @@ final class ZoomCanvasView: NSView {
 
         if rect.width >= 3,
            rect.height >= 3,
-           let full = captureViewportImage(policy: .stillImage) {
-            let scale = window?.backingScaleFactor ?? capturedFrame.display.scaleFactor
-            let pixelRect = CGRect(
-                x: rect.minX * scale,
-                y: rect.minY * scale,
-                width: rect.width * scale,
-                height: rect.height * scale
-            ).integral
-            if let cropped = full.cropping(to: pixelRect) {
-                switch action {
-                case .saveImage:
-                    presentSavePanelOverOverlay(cropped)
-                case .copyImage:
-                    ImageExporter.copyToPasteboard(cropped)
-                case .recognizeText:
-                    OcrService.recognizeAndCopy(cropped)
-                }
+           let cropped = captureViewportImage(
+               policy: .stillImage,
+               sourceRect: rect
+           ) {
+            switch action {
+            case .saveImage:
+                presentSavePanelOverOverlay(cropped)
+            case .copyImage:
+                ImageExporter.copyToPasteboard(cropped)
+            case .recognizeText:
+                OcrService.recognizeAndCopy(cropped)
             }
         }
         restoreAfterRegionSnip()

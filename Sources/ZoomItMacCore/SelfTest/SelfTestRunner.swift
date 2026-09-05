@@ -166,6 +166,11 @@ public enum SelfTestRunner {
         try testViewportSourceRect()
         try testViewportContentPointMapping()
         try testViewportContentToDestinationTransform()
+        try testCaptureAccessoryCompositorGeometry()
+        try testCaptureAccessoryCompositorBlendingAndShadow()
+        try testDrawingAccessoryCaptureVisibilityAndSharing()
+        try testZoomCanvasAccessoryCaptureIntegration()
+        try testCaptureFeedbackAndRecordingDimensionPolicies()
         try testFreehandAnnotationLifecycle()
         try testShapeAnnotationEndpointReplacement()
         try testAxisAlignedShapeCreation()
@@ -225,6 +230,7 @@ public enum SelfTestRunner {
         try testDrawingAccessorySuppressionLifecycle()
         try testDrawingInspectorRuntimePresentationSwitch()
         try testDrawingColorPickerCoordinatorLifecycle()
+        try testDrawingColorPickerPhysicalClicks()
         try testArrowheadPopoverClickLifecycle()
         try testDrawingToolbarMenuInteractionLifecycle()
         try testDrawingToolbarStyleActionsAndEraserHistory()
@@ -6753,10 +6759,11 @@ public enum SelfTestRunner {
         )
         try expect(
             DrawingInspectorDocumentLayout.documentSize(
-                contentSize: CGSize(width: 208, height: 280),
+                contentSize: CGSize(width: 900, height: 280),
                 viewportSize: CGSize(width: 208, height: 520)
             ) == CGSize(width: 208, height: 280),
-            "Expected short inspector content not to stretch to viewport height"
+            "Expected inspector documents to remain no wider than the viewport "
+                + "without stretching their height"
         )
         try expect(
             DrawingInspectorDocumentLayout.clampedScrollOrigin(
@@ -6764,14 +6771,14 @@ public enum SelfTestRunner {
                 documentSize: CGSize(width: 900, height: 90),
                 viewportSize: CGSize(width: 520, height: 90),
                 resetsToOrigin: false
-            ) == CGPoint(x: 12, y: 0)
+            ) == .zero
                 && DrawingInspectorDocumentLayout.clampedScrollOrigin(
                     CGPoint(x: 200, y: 0),
                     documentSize: CGSize(width: 900, height: 90),
                     viewportSize: CGSize(width: 520, height: 90),
                     resetsToOrigin: true
                 ) == .zero,
-            "Expected attached inspector scrolling to remain horizontal and reset by context"
+            "Expected attached inspector documents to stay pinned to the viewport origin"
         )
 
         let inspector = DrawingPropertiesController(
@@ -6856,19 +6863,155 @@ public enum SelfTestRunner {
         try verifyTitleLayout(availableWidth: 900, expectedRows: 1)
         try verifyTitleLayout(availableWidth: 420, expectedRows: 2)
 
-        for tool in [
+        let layoutWidths: [CGFloat] = [1_440, 1_280, 1_024, 800, 600]
+        let matrixTools: [AnnotationTool] = [
             AnnotationTool.rectangle, .diamond, .ellipse, .arrow, .line, .pen, .text
-        ] {
-            let controller = AnnotationController()
-            controller.currentTool = tool
-            controller.setShapeBackground(nil)
-            inspector.update(state: DrawingToolbarState(annotationController: controller))
-            try expect(
-                inspector.preferredContentSize.height.isFinite
-                    && inspector.preferredContentSize.height
-                        == ceil(inspector.view.fittingSize.height),
-                "Expected \(tool) to use its intrinsic attached inspector height"
+        ] + [.highlighter]
+        for screenWidth in layoutWidths {
+            let panelWidth = min(
+                DrawingInspectorVisualMetrics.attachedMaximumWidth,
+                screenWidth - DrawingAttachedInspectorPlacement.screenMargin * 2
             )
+            let availableWidth = panelWidth
+                - DrawingInspectorVisualMetrics.attachedHorizontalChrome
+            for tool in matrixTools {
+                try autoreleasepool {
+                    let matrixInspector = DrawingPropertiesController(
+                        commandSink: { _ in },
+                        colorPanelActivityChanged: { _ in }
+                    )
+                    let fillVariants = [.rectangle, .diamond, .ellipse].contains(tool)
+                        ? [false, true, false]
+                        : [false]
+                    var transitionHeights: [CGFloat] = []
+                    var transitionLayouts:
+                        [DrawingInspectorSectionMatrix.DrawingToolbarHorizontalSectionLayout] = []
+                    for showsFill in fillVariants {
+                        let controller = AnnotationController()
+                        controller.currentTool = tool
+                        controller.setShapeBackground(
+                            showsFill ? .palette(.backgroundRed) : nil
+                        )
+                        let state = DrawingToolbarState(annotationController: controller)
+                        matrixInspector.setAvailableHorizontalWidth(availableWidth)
+                        matrixInspector.update(state: state)
+                        let frames = matrixInspector.visibleSectionFramesForTesting()
+                        transitionHeights.append(matrixInspector.preferredContentSize.height)
+                        let layout = matrixInspector.sectionLayoutForTesting
+                        transitionLayouts.append(layout)
+                        let frameValues = Array(frames.values)
+                        let rootBounds = matrixInspector.view.bounds.insetBy(
+                            dx: -0.5,
+                            dy: -0.5
+                        )
+                        let sectionsDoNotOverlap = frameValues.indices.allSatisfy { index in
+                            frameValues.indices.dropFirst(index + 1).allSatisfy {
+                                !frameValues[index].intersects(frameValues[$0])
+                            }
+                        }
+                        let visibleDescendants = descendantViews(
+                            of: NSView.self,
+                            in: matrixInspector.view
+                        ).filter {
+                            $0 !== matrixInspector.view
+                                && !($0.superview is NSTextField)
+                                && !$0.isHidden
+                                && !$0.frame.isEmpty
+                        }
+                        let descendantsFit = visibleDescendants.allSatisfy {
+                            rootBounds.contains(
+                                frame($0, convertedTo: matrixInspector.view)
+                            )
+                        }
+                        let clippedDescendants = visibleDescendants.compactMap {
+                            view -> String? in
+                            let frame = frame(
+                                view,
+                                convertedTo: matrixInspector.view
+                            )
+                            return rootBounds.contains(frame)
+                                ? nil
+                                : "\(type(of: view)) \(frame)"
+                        }
+
+                        let card = DrawingInspectorView(propertiesView: matrixInspector.view)
+                        card.frame = CGRect(
+                            origin: .zero,
+                            size: CGSize(
+                                width: matrixInspector.preferredContentSize.width
+                                    + DrawingInspectorVisualMetrics.attachedHorizontalChrome,
+                                height: matrixInspector.preferredContentSize.height
+                                    + DrawingInspectorVisualMetrics.attachedVerticalInset * 2
+                            )
+                        )
+                        card.update(
+                            state: state,
+                            contentSize: matrixInspector.preferredContentSize
+                        )
+                        card.layoutSubtreeIfNeeded()
+
+                        try expect(
+                            layout.rows.count >= 1
+                                && layout.rows.count <= 3
+                                && layout.rows.flatMap { $0 }
+                                    == state.visibleInspectorSections
+                                && layout.documentWidth <= availableWidth
+                                && layout.rowWidths.allSatisfy {
+                                    $0 <= availableWidth + 0.5
+                                }
+                                && matrixInspector.preferredContentSize.width
+                                    == layout.documentWidth
+                                && matrixInspector.preferredContentSize.height.isFinite
+                                && matrixInspector.preferredContentSize.height
+                                    == ceil(matrixInspector.view.fittingSize.height)
+                                && Set(frames.keys) == Set(state.visibleInspectorSections)
+                                && frameValues.allSatisfy {
+                                    !$0.isEmpty && rootBounds.contains($0)
+                                }
+                                && sectionsDoNotOverlap
+                                && descendantsFit
+                                && card.frame.width <= panelWidth + 0.5
+                                && !card.hasHorizontalScrollerForTesting
+                                && card.documentSizeForTesting.width
+                                    <= card.viewportSizeForTesting.width + 0.5,
+                            "Expected \(tool) at \(Int(screenWidth)) px with Fill "
+                                + "\(showsFill ? "visible" : "hidden") to fit in 1-3 "
+                                + "ordered rows without clipping, overlap, or horizontal scrolling "
+                                + "(layout \(layout), frames \(frames), root \(rootBounds), "
+                                + "clipped \(clippedDescendants), preferred "
+                                + "\(matrixInspector.preferredContentSize), fitting "
+                                + "\(matrixInspector.view.fittingSize), document "
+                                + "\(card.documentSizeForTesting), viewport "
+                                + "\(card.viewportSizeForTesting), scroller "
+                                + "\(card.hasHorizontalScrollerForTesting))"
+                        )
+                        if [.rectangle, .diamond].contains(tool), showsFill {
+                            try expect(
+                                state.visibleInspectorSections == [
+                                    .strokeColor,
+                                    .background,
+                                    .fill,
+                                    .strokeWidth,
+                                    .strokeStyle,
+                                    .sloppiness,
+                                    .edges,
+                                    .opacity,
+                                    .layers
+                                ],
+                                "Expected the full shape matrix to preserve section order"
+                            )
+                        }
+                    }
+                    if transitionHeights.count == 3 {
+                        try expect(
+                            transitionHeights[0] == transitionHeights[2],
+                            "Expected Fill off/on/off to restore the exact original inspector height "
+                                + "for \(tool) at \(Int(screenWidth)) px: \(transitionHeights), "
+                                + "layouts \(transitionLayouts)"
+                        )
+                    }
+                }
+            }
         }
 
         emptyController.currentTool = .rectangle
@@ -6935,8 +7078,7 @@ public enum SelfTestRunner {
             in: toolbar
         ).compactMap { $0.accessibilityLabel() }
         try expect(
-            primaryLabels.contains("Keep Drawing Tool Active")
-                && !primaryLabels.contains("Open Drawing Inspector")
+            !primaryLabels.contains("Open Drawing Inspector")
                 && !primaryLabels.contains("Close Drawing Inspector")
                 && !primaryLabels.contains("Attach Inspector to Toolbar")
                 && !primaryLabels.contains("Dock Inspector to Side"),
@@ -8212,7 +8354,7 @@ public enum SelfTestRunner {
     private static func testDrawingToolShortcuts() throws {
         try expect(
             DrawingToolbarVisualMetrics.shellHeight == 54
-                && DrawingToolbarVisualMetrics.desktopWidth == 698
+                && DrawingToolbarVisualMetrics.desktopWidth == 648
                 && DrawingToolbarVisualMetrics.shellInset == 5
                 && DrawingToolbarVisualMetrics.shellCornerRadius == 15
                 && DrawingToolbarVisualMetrics.buttonSide == 44
@@ -8225,7 +8367,7 @@ public enum SelfTestRunner {
                 && DrawingToolbarVisualMetrics.numericHintFontDesign
                     == "system-regular"
                 && DrawingToolShortcuts.DrawingToolbarStructure.orderedGroups
-                    == [.keepActive, .hand, .mainTools, .overflow],
+                    == [.hand, .mainTools, .overflow],
             "Expected larger toolbar tiles and legible Excalidraw-style numeric hints"
         )
         let expectedNumericTools: [(String, UInt16, AnnotationTool)] = [
@@ -8541,12 +8683,13 @@ public enum SelfTestRunner {
             let layout = DrawingInspectorSectionMatrix
                 .DrawingToolbarHorizontalSectionPacker.layout(
                     sections: sections,
-                    availableWidth: 420
+                    availableWidth: 552
                 )
             try expect(
-                layout.rows.count <= 2
+                layout.rows.count <= 3
                     && layout.rows.flatMap { $0 } == sections,
-                "Expected \(tool) attached properties to preserve exact section order in at most two rows"
+                "Expected \(tool) attached properties to preserve exact section order "
+                    + "in at most three rows on a 600-point display"
             )
         }
 
@@ -8556,9 +8699,11 @@ public enum SelfTestRunner {
                 availableWidth: 220
             )
         try expect(
-            narrowAttachedLayout.rows.count == 2
-                && narrowAttachedLayout.documentWidth > 220,
-            "Expected a third-row risk to widen the document for horizontal scrolling"
+            narrowAttachedLayout.rows.flatMap { $0 }
+                == DrawingInspectorSectionMatrix.sections(for: .rectangle)
+                && narrowAttachedLayout.documentWidth <= 220
+                && narrowAttachedLayout.rowWidths.allSatisfy { $0 <= 220 },
+            "Expected narrow attached layouts to add rows instead of widening the document"
         )
 
         let attachedToolbar = CGRect(x: 300, y: 650, width: 300, height: 50)
@@ -9105,9 +9250,10 @@ public enum SelfTestRunner {
             }
             try expect(
                 interactionStates.last?.popoverOpen == true
+                    && palettePanel.sharingType == .none
                     && controller.selectedElementSnapshot.count == 1,
                 "Expected the arrowhead palette to retain accessory interaction "
-                    + "and selection while open"
+                    + "and selection while remaining non-shareable"
             )
             try dispatchPhysicalClick(on: button)
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
@@ -9411,6 +9557,81 @@ public enum SelfTestRunner {
         controller.updateState(
             DrawingToolbarState(annotationController: annotationController)
         )
+        let toolbarFrameBeforeHeightTransitions = controller.toolbarFrameForTesting
+        annotationController.setShapeBackground(nil)
+        controller.updateState(
+            DrawingToolbarState(annotationController: annotationController)
+        )
+        let fillOffFrame = controller.inspectorFrameForTesting
+        annotationController.setShapeBackground(.palette(.backgroundRed))
+        controller.updateState(
+            DrawingToolbarState(annotationController: annotationController)
+        )
+        let fillOnFrame = controller.inspectorFrameForTesting
+        annotationController.setShapeBackground(nil)
+        controller.updateState(
+            DrawingToolbarState(annotationController: annotationController)
+        )
+        let fillOffAgainFrame = controller.inspectorFrameForTesting
+
+        func inspectorHugsCurrentContent(_ frame: CGRect) -> Bool {
+            abs(
+                frame.height
+                    - controller.propertiesContentSizeForTesting.height
+                    - DrawingInspectorVisualMetrics.attachedVerticalInset * 2
+            ) <= 1
+                && controller.propertiesContentSizeForTesting.height
+                    == controller.propertiesFittingHeightForTesting
+                && abs(
+                    controller.inspectorDocumentSizeForTesting.height
+                        - controller.inspectorViewportSizeForTesting.height
+                ) <= 1
+                && !controller.inspectorHasHorizontalScrollerForTesting
+        }
+
+        try expect(
+            controller.toolbarFrameForTesting == toolbarFrameBeforeHeightTransitions
+                && fillOnFrame.height > fillOffFrame.height
+                && fillOffAgainFrame.height == fillOffFrame.height
+                && inspectorHugsCurrentContent(fillOffAgainFrame)
+                && availableFrame.contains(fillOffFrame)
+                && availableFrame.contains(fillOnFrame)
+                && availableFrame.contains(fillOffAgainFrame),
+            "Expected Fill off/on/off to grow and shrink the attached inspector exactly "
+                + "without moving the toolbar or leaving scrollable empty space"
+        )
+
+        annotationController.setShapeBackground(.palette(.backgroundRed))
+        controller.updateState(
+            DrawingToolbarState(annotationController: annotationController)
+        )
+        let tallFrame = controller.inspectorFrameForTesting
+        annotationController.currentTool = .highlighter
+        controller.updateState(
+            DrawingToolbarState(annotationController: annotationController)
+        )
+        let shortFrame = controller.inspectorFrameForTesting
+        annotationController.currentTool = .rectangle
+        controller.updateState(
+            DrawingToolbarState(annotationController: annotationController)
+        )
+        let tallAgainFrame = controller.inspectorFrameForTesting
+        try expect(
+            controller.toolbarFrameForTesting == toolbarFrameBeforeHeightTransitions
+                && tallFrame.height > shortFrame.height
+                && tallAgainFrame.height == tallFrame.height
+                && inspectorHugsCurrentContent(tallAgainFrame)
+                && availableFrame.contains(tallFrame)
+                && availableFrame.contains(shortFrame)
+                && availableFrame.contains(tallAgainFrame),
+            "Expected tall-to-short-to-tall tool transitions to restore the exact fitting height "
+                + "while preserving the adjoining toolbar edge"
+        )
+
+        annotationController.setShapeBackground(nil)
+        controller.updateState(
+            DrawingToolbarState(annotationController: annotationController)
+        )
         try expect(
             controller.inspectorIsVisibleForTesting
                 && controller.toolbarFrameForTesting == selectEdgeToolbarFrame,
@@ -9543,38 +9764,101 @@ public enum SelfTestRunner {
         let originalSharingType = sharedPanel.sharingType
         let originalVisibility = sharedPanel.isVisible
 
-        strokeWell.performClick(nil)
+        strokeWell.activate(true)
         try expect(
             commands == [.beginContinuousStyleEdit(.colorPicker)]
                 && activityChanges == [true]
                 && inspector.colorPickerStateForTesting.activeChannel == .stroke
                 && inspector.colorPickerStateForTesting.transactionActive
+                && colorsMatch(sharedPanel.color, strokeWell.color)
                 && strokeWell.accessibilityValue() as? String == "Selected",
-            "Expected repeated Stroke activation to open one picker transaction"
+            "Expected repeated Stroke activation to open one picker transaction "
+                + "(commands \(commands), activity \(activityChanges), channel "
+                + "\(String(describing: inspector.colorPickerStateForTesting.activeChannel)), "
+                + "transaction \(inspector.colorPickerStateForTesting.transactionActive), "
+                + "panel synchronized \(colorsMatch(sharedPanel.color, strokeWell.color)), "
+                + "value \(String(describing: strokeWell.accessibilityValue())))"
         )
 
-        backgroundWell.performClick(nil)
+        let textColor = AnnotationColorValue.rgba(
+            red: 0.16,
+            green: 0.68,
+            blue: 0.42,
+            alpha: 1
+        )
+        annotationController.setTextColor(textColor)
+        annotationController.currentTool = .text
+        inspector.update(state: DrawingToolbarState(annotationController: annotationController))
+        try expect(
+            inspector.colorPickerStateForTesting.activeChannel == .text
+                && colorsMatch(sharedPanel.color, textColor.nsColor),
+            "Expected an open picker to switch to the Text channel and refresh its color"
+        )
+
+        annotationController.currentTool = .rectangle
+        inspector.update(state: DrawingToolbarState(annotationController: annotationController))
+        guard let coralButton = descendantViews(
+            of: NSButton.self,
+            in: inspector.view
+        ).first(where: { $0.accessibilityLabel() == "Stroke Coral" }) else {
+            throw SelfTestError.failure("Expected Stroke Coral preset")
+        }
+        coralButton.performClick(nil)
+        NotificationCenter.default.post(
+            name: NSColorPanel.colorDidChangeNotification,
+            object: sharedPanel
+        )
+        let adjustedStrokeColor = AnnotationColorValue.rgba(
+            red: 0.31,
+            green: 0.52,
+            blue: 0.73,
+            alpha: 0.88
+        )
+        sharedPanel.color = adjustedStrokeColor.nsColor
+        NotificationCenter.default.post(
+            name: NSColorPanel.colorDidChangeNotification,
+            object: sharedPanel
+        )
+        try expect(
+            commands == [
+                .beginContinuousStyleEdit(.colorPicker),
+                .setStrokeColor(.palette(.strokeCoral)),
+                .setStrokeColor(adjustedStrokeColor)
+            ]
+                && colorsMatch(strokeWell.color, adjustedStrokeColor.nsColor),
+            "Expected a preset to synchronize the open panel without a stale duplicate "
+                + "and the next adjustment to continue from that selection "
+                + "(commands \(commands), panel \(sharedPanel.color), well \(strokeWell.color))"
+        )
+
+        backgroundWell.activate(true)
         let visiblePickerWindows = NSApp.windows.filter {
             guard $0.isVisible else { return false }
             return $0 === sharedPanel
                 || String(describing: type(of: $0)).contains("Popover")
         }
         try expect(
-            commands == [.beginContinuousStyleEdit(.colorPicker)]
+            commands == [
+                .beginContinuousStyleEdit(.colorPicker),
+                .setStrokeColor(.palette(.strokeCoral)),
+                .setStrokeColor(adjustedStrokeColor)
+            ]
                 && activityChanges == [true]
                 && inspector.colorPickerStateForTesting.activeChannel == .background
                 && colorWells.filter(\.isActive).count == 1
                 && visiblePickerWindows.count == 1
-                && sharedPanel.parent === originalParent
-                && sharedPanel.level == originalLevel
-                && sharedPanel.sharingType == originalSharingType
-                && sharedPanel.isVisible == originalVisibility,
-            "Expected channel switching to retain one native minimal picker without presenting "
-                + "NSColorPanel (active wells \(colorWells.filter(\.isActive).count), "
+                && sharedPanel.parent === host
+                && sharedPanel.level.rawValue == host.level.rawValue + 1
+                && sharedPanel.sharingType == .none
+                && colorsMatch(sharedPanel.color, backgroundWell.color)
+                && sharedPanel.isVisible,
+            "Expected channel switching to retain one shared color panel "
+                + "(active wells \(colorWells.filter(\.isActive).count), "
                 + "visible picker windows \(visiblePickerWindows.count), "
-                + "parent stable \(sharedPanel.parent === originalParent), "
-                + "level stable \(sharedPanel.level == originalLevel), "
-                + "sharing stable \(sharedPanel.sharingType == originalSharingType), "
+                + "parent attached \(sharedPanel.parent === host), "
+                + "level elevated \(sharedPanel.level.rawValue == host.level.rawValue + 1), "
+                + "sharing disabled \(sharedPanel.sharingType == .none), "
+                + "panel synchronized \(colorsMatch(sharedPanel.color, backgroundWell.color)), "
                 + "visibility \(sharedPanel.isVisible)/\(originalVisibility))"
         )
 
@@ -9583,6 +9867,8 @@ public enum SelfTestRunner {
         try expect(
             commands == [
                 .beginContinuousStyleEdit(.colorPicker),
+                .setStrokeColor(.palette(.strokeCoral)),
+                .setStrokeColor(adjustedStrokeColor),
                 .endContinuousStyleEdit(.colorPicker)
             ]
                 && activityChanges == [true, false]
@@ -9611,22 +9897,296 @@ public enum SelfTestRunner {
             "Expected custom wells to restore their normal tooltip when available"
         )
 
-        annotationController.currentTool = .text
-        inspector.update(state: DrawingToolbarState(annotationController: annotationController))
+        strokeWell.activate(true)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
         try expect(
-            strokeWell.isEnabled
+            colorsMatch(sharedPanel.color, strokeWell.color)
                 && commands == [
                     .beginContinuousStyleEdit(.colorPicker),
-                    .endContinuousStyleEdit(.colorPicker)
+                    .setStrokeColor(.palette(.strokeCoral)),
+                    .setStrokeColor(adjustedStrokeColor),
+                    .endContinuousStyleEdit(.colorPicker),
+                    .beginContinuousStyleEdit(.colorPicker)
                 ]
-                && activityChanges == [true, false]
-                && sharedPanel.parent === originalParent
-                && sharedPanel.isVisible == originalVisibility,
-            "Expected the Text stroke channel to remain available after one native picker transaction"
+                && activityChanges == [true, false, true],
+            "Expected close and reopen to seed the shared panel from the current Stroke color"
         )
+        inspector.dismissColorPanel()
 
         host.contentView = nil
         host.orderOut(nil)
+    }
+
+    private static func testDrawingColorPickerPhysicalClicks() throws {
+        let visibleFrame = NSScreen.main?.visibleFrame
+            ?? CGRect(x: 0, y: 0, width: 1_200, height: 800)
+        let host = NSWindow(
+            contentRect: visibleFrame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        host.isReleasedWhenClosed = false
+        host.level = .screenSaver
+        host.orderFront(nil)
+
+        let annotationController = AnnotationController()
+        annotationController.currentTool = .rectangle
+        var commands: [AppCommand] = []
+        let controller = DrawingToolbarController(
+            parentWindow: host,
+            annotationController: annotationController,
+            toolbarNormalizedPosition: nil,
+            commandSink: { command in
+                commands.append(command)
+                switch command {
+                case .beginContinuousStyleEdit(let owner):
+                    annotationController.beginContinuousStyleEdit(owner: owner)
+                case .endContinuousStyleEdit(let owner):
+                    _ = annotationController.endContinuousStyleEdit(owner: owner)
+                case .setStrokeColor(let color):
+                    annotationController.setStrokeColor(color)
+                case .setTextColor(let color):
+                    annotationController.setTextColor(color)
+                case .setShapeBackground(let color):
+                    annotationController.setShapeBackground(color)
+                default:
+                    break
+                }
+            },
+            restoreCanvasFocus: {},
+            toolbarPlacementDidChange: { _ in },
+            pointerInteractionChanged: { _ in }
+        )
+        controller.show()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        let originalPolicy = NSApp.activationPolicy()
+        let appWasActive = NSApp.isActive
+        _ = NSApp.setActivationPolicy(.accessory)
+        let sharedPanel = NSColorPanel.shared
+        let originalSharedParent = sharedPanel.parent
+        let originalSharedLevel = sharedPanel.level
+        let originalSharedSharingType = sharedPanel.sharingType
+        let originalSharedVisibility = sharedPanel.isVisible
+        defer {
+            controller.close()
+            host.orderOut(nil)
+            sharedPanel.level = originalSharedLevel
+            sharedPanel.sharingType = originalSharedSharingType
+            if let originalSharedParent {
+                originalSharedParent.addChildWindow(sharedPanel, ordered: .above)
+            } else {
+                sharedPanel.parent?.removeChildWindow(sharedPanel)
+            }
+            if originalSharedVisibility {
+                sharedPanel.orderFront(nil)
+            } else {
+                sharedPanel.orderOut(nil)
+            }
+            _ = NSApp.setActivationPolicy(originalPolicy)
+            if appWasActive {
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
+
+        func visibleColorPickerWindows() -> [NSWindow] {
+            NSApp.windows.filter {
+                guard $0.isVisible else { return false }
+                return $0 === sharedPanel
+                    || String(describing: type(of: $0)).contains("Popover")
+            }
+        }
+
+        func customWell(label: String) throws -> NSColorWell {
+            guard let contentView = controller.inspectorWindowForTesting.contentView,
+                  let well = descendantViews(
+                    of: NSColorWell.self,
+                    in: contentView
+                  ).first(where: { $0.accessibilityLabel() == label }) else {
+                throw SelfTestError.failure("Expected \(label)")
+            }
+            return well
+        }
+
+        func exercise(
+            tool: AnnotationTool,
+            label: String,
+            channel: DrawingColorPickerChannel,
+            color: AnnotationColorValue,
+            expectedColorCommand: AppCommand,
+            closeUsingPanel: Bool = false,
+            modelMatches: () -> Bool
+        ) throws {
+            controller.dismissTransientUI()
+            annotationController.currentTool = tool
+            if channel == .background {
+                annotationController.setShapeBackground(.palette(.backgroundRed))
+            }
+            controller.updateState(
+                DrawingToolbarState(annotationController: annotationController)
+            )
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            let well = try customWell(label: label)
+            let toolbarFrame = controller.toolbarFrameForTesting
+            let events = try physicalClickEvents(in: well)
+            guard let contentView = controller.inspectorWindowForTesting.contentView else {
+                throw SelfTestError.failure("Expected attached inspector content")
+            }
+            let hitPoint = contentView.convert(events.mouseDown.locationInWindow, from: nil)
+
+            commands.removeAll()
+            NSApp.deactivate()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+            try expect(
+                !NSApp.isActive
+                    && NSApp.activationPolicy() == .accessory
+                    && well.isEnabled
+                    && well.acceptsFirstMouse(for: events.mouseDown)
+                    && contentView.hitTest(hitPoint) === well
+                    && well.mouseDownCanMoveWindow == false
+                    && well.colorWellStyle != .minimal
+                    && visibleColorPickerWindows().isEmpty,
+                "Expected the inactive \(channel) custom tile to own its first mouse event "
+                    + "without entering toolbar drag handling"
+            )
+
+            try dispatchPhysicalMouseClick(in: well)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            try expect(
+                NSApp.activationPolicy() == .accessory
+                    && controller.toolbarFrameForTesting == toolbarFrame
+                    && controller.colorPickerStateForTesting.activeChannel == channel
+                    && controller.colorPickerStateForTesting.transactionActive
+                    && well.isActive
+                    && visibleColorPickerWindows().count == 1
+                    && commands == [.beginContinuousStyleEdit(.colorPicker)]
+                    && colorsMatch(sharedPanel.color, well.color)
+                    && sharedPanel.parent === controller.inspectorWindowForTesting
+                    && sharedPanel.level.rawValue
+                        == controller.inspectorWindowForTesting.level.rawValue + 1
+                    && sharedPanel.sharingType == .none
+                    && sharedPanel.isVisible,
+                "Expected one shared picker and one transaction for the inactive \(channel) tile "
+                    + "(app active \(NSApp.isActive), policy \(NSApp.activationPolicy()), "
+                    + "toolbar stable \(controller.toolbarFrameForTesting == toolbarFrame), "
+                    + "channel \(String(describing: controller.colorPickerStateForTesting.activeChannel)), "
+                    + "transaction \(controller.colorPickerStateForTesting.transactionActive), "
+                    + "well active \(well.isActive), windows "
+                    + "\(visibleColorPickerWindows().map { String(describing: type(of: $0)) }), "
+                    + "commands \(commands), shared visible \(sharedPanel.isVisible))"
+            )
+
+            sharedPanel.color = color.nsColor
+            NotificationCenter.default.post(
+                name: NSColorPanel.colorDidChangeNotification,
+                object: sharedPanel
+            )
+            RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+            try expect(
+                commands == [
+                    .beginContinuousStyleEdit(.colorPicker),
+                    expectedColorCommand
+                ]
+                    && modelMatches(),
+                "Expected the \(channel) picker to dispatch exactly one channel-specific color change "
+                    + "(commands \(commands), expected \(expectedColorCommand), "
+                    + "model matches \(modelMatches()))"
+            )
+
+            if closeUsingPanel {
+                sharedPanel.close()
+            } else {
+                controller.dismissTransientUI()
+            }
+            controller.dismissTransientUI()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            try expect(
+                commands == [
+                    .beginContinuousStyleEdit(.colorPicker),
+                    expectedColorCommand,
+                    .endContinuousStyleEdit(.colorPicker)
+                ]
+                    && !controller.colorPickerStateForTesting.transactionActive
+                    && controller.colorPickerStateForTesting.activeChannel == nil
+                    && visibleColorPickerWindows().isEmpty
+                    && sharedPanel.parent === originalSharedParent
+                    && sharedPanel.level == originalSharedLevel
+                    && sharedPanel.sharingType == originalSharedSharingType
+                    && sharedPanel.isVisible == originalSharedVisibility,
+                "Expected one close and one matching transaction end for the \(channel) picker"
+            )
+        }
+
+        let strokeColor = AnnotationColorValue.rgba(
+            red: 0.12,
+            green: 0.34,
+            blue: 0.56,
+            alpha: 1
+        )
+        try exercise(
+            tool: .rectangle,
+            label: "Custom stroke color",
+            channel: .stroke,
+            color: strokeColor,
+            expectedColorCommand: .setStrokeColor(strokeColor),
+            modelMatches: {
+                annotationController.currentStyle.strokeColor == strokeColor
+            }
+        )
+
+        let backgroundColor = AnnotationColorValue.rgba(
+            red: 0.68,
+            green: 0.24,
+            blue: 0.42,
+            alpha: 0.9
+        )
+        try exercise(
+            tool: .rectangle,
+            label: "Custom background color",
+            channel: .background,
+            color: backgroundColor,
+            expectedColorCommand: .setShapeBackground(backgroundColor),
+            modelMatches: {
+                annotationController.currentStyle.fillColor == backgroundColor
+                    && annotationController.currentStyle.fillStyle != .none
+            }
+        )
+
+        let textColor = AnnotationColorValue.rgba(
+            red: 0.22,
+            green: 0.72,
+            blue: 0.38,
+            alpha: 1
+        )
+        try exercise(
+            tool: .text,
+            label: "Custom stroke color",
+            channel: .text,
+            color: textColor,
+            expectedColorCommand: .setTextColor(textColor),
+            closeUsingPanel: true,
+            modelMatches: {
+                annotationController.currentStyle.strokeColor == textColor
+            }
+        )
+
+        let highlighterColor = AnnotationColorValue.rgba(
+            red: 0.92,
+            green: 0.54,
+            blue: 0.16,
+            alpha: 0.7
+        )
+        try exercise(
+            tool: .highlighter,
+            label: "Custom stroke color",
+            channel: .stroke,
+            color: highlighterColor,
+            expectedColorCommand: .setStrokeColor(highlighterColor),
+            modelMatches: {
+                annotationController.currentStyle.strokeColor == highlighterColor
+            }
+        )
     }
 
     private static func testDrawingToolbarStyleActionsAndEraserHistory() throws {
@@ -10584,7 +11144,6 @@ public enum SelfTestRunner {
         toolbar.beginDragFromHandleForTesting(with: dragMouseDown)
         let expectedItemOrder = [
             "Move Drawing Toolbar",
-            "Keep Drawing Tool Active",
             "separator",
             "Hand",
             "Select",
@@ -10616,8 +11175,8 @@ public enum SelfTestRunner {
                 && toolbar.isToolSelected(.highlighter)
         try expect(
             preferredSize.height == 54
-                && preferredSize.width == 698
-                && frames.count == 12
+                && preferredSize.width == 648
+                && frames.count == 11
                 && DrawingToolbarVisualMetrics.buttonSide == 44
                 && itemOrder == expectedItemOrder
                 && selectedFilledButtons == ["Rectangle"]
@@ -10648,7 +11207,6 @@ public enum SelfTestRunner {
                     )
                 ]
                 && flippedHintOrigin == CGPoint(x: 35, y: 30)
-                && labels.contains("Keep Drawing Tool Active")
                 && labels.contains("Hand")
                 && labels.contains("Highlighter")
                 && labels.contains("More Drawing Actions")
@@ -10658,11 +11216,11 @@ public enum SelfTestRunner {
                 + "one selected fill, and lower-right numeric hints"
         )
         controller.currentTool = .pen
-        controller.setKeepsToolActive(false)
-        controller.completeToolUseIfNeeded()
+        controller.begin(at: CGPoint(x: 0, y: 0))
+        controller.end(at: CGPoint(x: 20, y: 20))
         try expect(
-            controller.currentTool == .select,
-            "Expected the primary lock tile to control one-shot tool behavior"
+            controller.currentTool == .pen,
+            "Expected drawing tools to remain selected after use without a toolbar lock mode"
         )
     }
 
@@ -14413,6 +14971,571 @@ public enum SelfTestRunner {
         }
     }
 
+    private static func testCaptureAccessoryCompositorGeometry() throws {
+        let display = CGRect(x: -200, y: 500, width: 100, height: 80)
+        let localAccessory = CGRect(x: 10, y: 20, width: 20, height: 10)
+        func globalFrame(
+            displayFrame: CGRect,
+            localTopLeftFrame: CGRect
+        ) -> CGRect {
+            CGRect(
+                x: displayFrame.minX + localTopLeftFrame.minX,
+                y: displayFrame.maxY - localTopLeftFrame.maxY,
+                width: localTopLeftFrame.width,
+                height: localTopLeftFrame.height
+            )
+        }
+
+        let accessory = globalFrame(
+            displayFrame: display,
+            localTopLeftFrame: localAccessory
+        )
+        let oneX = CaptureAccessoryCompositor.placement(
+            accessoryFrame: accessory,
+            displayFrame: display,
+            sourceRegion: CGRect(x: 0, y: 0, width: 100, height: 80),
+            outputPixelSize: CGSize(width: 100, height: 80)
+        )
+        let twoX = CaptureAccessoryCompositor.placement(
+            accessoryFrame: accessory,
+            displayFrame: display,
+            sourceRegion: CGRect(x: 0, y: 0, width: 100, height: 80),
+            outputPixelSize: CGSize(width: 200, height: 160)
+        )
+        try expect(
+            oneX == CaptureAccessoryPlacement(
+                drawRect: CGRect(x: 10, y: 50, width: 20, height: 10),
+                clipRect: CGRect(x: 10, y: 50, width: 20, height: 10)
+            )
+                && twoX == CaptureAccessoryPlacement(
+                    drawRect: CGRect(x: 20, y: 100, width: 40, height: 20),
+                    clipRect: CGRect(x: 20, y: 100, width: 40, height: 20)
+                ),
+            "Expected accessory placement to use output/source scale at 1x and 2x"
+        )
+
+        let aboveDisplay = CGRect(x: -200, y: 1_200, width: 100, height: 80)
+        let belowDisplay = CGRect(x: -200, y: -600, width: 100, height: 80)
+        for shiftedDisplay in [aboveDisplay, belowDisplay] {
+            let shiftedAccessory = globalFrame(
+                displayFrame: shiftedDisplay,
+                localTopLeftFrame: localAccessory
+            )
+            try expect(
+                CaptureAccessoryCompositor.placement(
+                    accessoryFrame: shiftedAccessory,
+                    displayFrame: shiftedDisplay,
+                    sourceRegion: CGRect(
+                        x: 0,
+                        y: 0,
+                        width: 100,
+                        height: 80
+                    ),
+                    outputPixelSize: CGSize(width: 100, height: 80)
+                ) == oneX,
+                "Expected display origins above and below the primary display "
+                    + "to preserve display-local top-left placement"
+            )
+        }
+
+        let mixedScaleRegion = CaptureAccessoryCompositor.placement(
+            accessoryFrame: accessory,
+            displayFrame: display,
+            sourceRegion: CGRect(x: 5, y: 15, width: 40, height: 30),
+            outputPixelSize: CGSize(width: 80, height: 90)
+        )
+        try expect(
+            mixedScaleRegion == CaptureAccessoryPlacement(
+                drawRect: CGRect(x: 10, y: 45, width: 40, height: 30),
+                clipRect: CGRect(x: 10, y: 45, width: 40, height: 30)
+            ),
+            "Expected region placement to use independent mixed X/Y output scales"
+        )
+
+        let partiallyVisible = globalFrame(
+            displayFrame: display,
+            localTopLeftFrame: CGRect(
+                x: -4.5,
+                y: 12.25,
+                width: 12,
+                height: 8.5
+            )
+        )
+        let partialPlacement = CaptureAccessoryCompositor.placement(
+            accessoryFrame: partiallyVisible,
+            displayFrame: display,
+            sourceRegion: CGRect(x: 0, y: 10, width: 30, height: 20),
+            outputPixelSize: CGSize(width: 75, height: 30)
+        )
+        try expect(
+            partialPlacement == CaptureAccessoryPlacement(
+                drawRect: CGRect(
+                    x: -11.25,
+                    y: 13.875,
+                    width: 30,
+                    height: 12.75
+                ),
+                clipRect: CGRect(
+                    x: 0,
+                    y: 13.875,
+                    width: 18.75,
+                    height: 12.75
+                )
+            ),
+            "Expected fractional panels to clip against both the display and "
+                + "top-left recording region without integral rounding"
+        )
+    }
+
+    private static func testCaptureAccessoryCompositorBlendingAndShadow() throws {
+        let display = CGRect(x: 0, y: 0, width: 40, height: 30)
+        let base = try makeSolidImage(
+            width: 40,
+            height: 30,
+            color: .white
+        )
+        let red = try makeSolidImage(
+            width: 20,
+            height: 10,
+            color: .red
+        )
+        let blue = try makeSolidImage(
+            width: 20,
+            height: 10,
+            color: .blue
+        )
+        let translucent = try makeSolidImage(
+            width: 6,
+            height: 6,
+            color: NSColor.red.withAlphaComponent(0.5)
+        )
+        func globalFrame(_ localTopLeftFrame: CGRect) -> CGRect {
+            CGRect(
+                x: localTopLeftFrame.minX,
+                y: display.maxY - localTopLeftFrame.maxY,
+                width: localTopLeftFrame.width,
+                height: localTopLeftFrame.height
+            )
+        }
+
+        guard let composed = CaptureAccessoryCompositor.compose(
+            baseImage: base,
+            displayFrame: display,
+            sourceRegion: CGRect(origin: .zero, size: display.size),
+            outputPixelSize: display.size,
+            accessories: [
+                CaptureAccessorySnapshot(
+                    globalFrame: globalFrame(
+                        CGRect(x: 4, y: 4, width: 20, height: 10)
+                    ),
+                    image: red
+                ),
+                CaptureAccessorySnapshot(
+                    globalFrame: globalFrame(
+                        CGRect(x: 9, y: 7, width: 20, height: 10)
+                    ),
+                    image: blue
+                ),
+                CaptureAccessorySnapshot(
+                    globalFrame: globalFrame(
+                        CGRect(x: 31, y: 3, width: 6, height: 6)
+                    ),
+                    image: translucent
+                )
+            ]
+        ) else {
+            throw SelfTestError.failure(
+                "Could not create synthetic accessory composition"
+            )
+        }
+        let representation = NSBitmapImageRep(cgImage: composed)
+        guard let outside = representation.colorAt(x: 1, y: 1)?
+                  .usingColorSpace(.sRGB),
+              let toolbarOnly = representation.colorAt(x: 6, y: 6)?
+                  .usingColorSpace(.sRGB),
+              let overlap = representation.colorAt(x: 12, y: 9)?
+                  .usingColorSpace(.sRGB),
+              let alphaBlend = representation.colorAt(x: 33, y: 5)?
+                  .usingColorSpace(.sRGB) else {
+            throw SelfTestError.failure(
+                "Could not sample synthetic accessory composition"
+            )
+        }
+        try expect(
+            outside.redComponent > 0.95
+                && outside.greenComponent > 0.95
+                && outside.blueComponent > 0.95
+                && toolbarOnly.redComponent > 0.9
+                && toolbarOnly.greenComponent < 0.1
+                && overlap.blueComponent > 0.9
+                && overlap.redComponent < 0.1
+                && alphaBlend.redComponent > 0.9
+                && (0.4...0.6).contains(alphaBlend.greenComponent)
+                && (0.4...0.6).contains(alphaBlend.blueComponent),
+            "Expected base -> toolbar -> inspector alpha blending in stable z-order"
+        )
+
+        let shadowContent = try makeSolidImage(
+            width: 12,
+            height: 12,
+            color: .black
+        )
+        guard let shadowSnapshot = CaptureAccessorySnapshotRenderer.snapshot(
+            contentImage: shadowContent,
+            globalFrame: CGRect(x: 10, y: 10, width: 12, height: 12),
+            scaleX: 2,
+            scaleY: 2,
+            shadow: .inspector
+        ) else {
+            throw SelfTestError.failure(
+                "Could not create inspector shadow snapshot"
+            )
+        }
+        let shadowRepresentation = NSBitmapImageRep(
+            cgImage: shadowSnapshot.image
+        )
+        let padding = Int(CaptureAccessoryShadowStyle.inspector.padding * 2)
+        var shadowPixelFound = false
+        for y in 0..<shadowRepresentation.pixelsHigh {
+            for x in 0..<shadowRepresentation.pixelsWide {
+                let insideContent = x >= padding
+                    && x < padding + 24
+                    && y >= padding
+                    && y < padding + 24
+                if !insideContent,
+                   (shadowRepresentation.colorAt(x: x, y: y)?
+                       .alphaComponent ?? 0) > 0.01 {
+                    shadowPixelFound = true
+                    break
+                }
+            }
+            if shadowPixelFound { break }
+        }
+        try expect(
+            shadowSnapshot.globalFrame
+                == CGRect(x: -6, y: -6, width: 44, height: 44)
+                && shadowSnapshot.image.width == 88
+                && shadowSnapshot.image.height == 88
+                && shadowPixelFound,
+            "Expected inspector snapshots to include deterministic alpha shadow padding"
+        )
+    }
+
+    private static func testDrawingAccessoryCaptureVisibilityAndSharing() throws {
+        let visibleFrame = NSScreen.main?.visibleFrame
+            ?? CGRect(x: 0, y: 0, width: 1_200, height: 800)
+        let parent = NSWindow(
+            contentRect: visibleFrame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        parent.level = .screenSaver
+        parent.isReleasedWhenClosed = false
+        parent.orderFront(nil)
+
+        let annotationController = AnnotationController()
+        annotationController.currentTool = .hand
+        let controller = DrawingToolbarController(
+            parentWindow: parent,
+            annotationController: annotationController,
+            toolbarNormalizedPosition: nil,
+            commandSink: { _ in },
+            restoreCanvasFocus: {},
+            toolbarPlacementDidChange: { _ in },
+            pointerInteractionChanged: { _ in }
+        )
+        defer {
+            controller.close()
+            parent.orderOut(nil)
+        }
+
+        try expect(
+            controller.captureAccessorySnapshots(
+                scaleX: 1,
+                scaleY: 1
+            ).isEmpty,
+            "Expected inactive drawing controls to produce no capture snapshots"
+        )
+        controller.show()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+        let handSnapshots = controller.captureAccessorySnapshots(
+            scaleX: 1,
+            scaleY: 1
+        )
+        try expect(
+            handSnapshots.count == 1
+                && handSnapshots[0].globalFrame
+                    == controller.toolbarFrameForTesting
+                && controller.toolbarWindowForTesting.sharingType == .readOnly
+                && controller.inspectorWindowForTesting.sharingType == .readOnly
+                && controller.toolbarWindowForTesting.level.rawValue
+                    >= parent.level.rawValue
+                && controller.inspectorWindowForTesting.level.rawValue
+                    >= controller.toolbarWindowForTesting.level.rawValue
+                && controller.toolbarWindowForTesting.parent === parent,
+            "Expected the visible stable toolbar to be externally shareable "
+                + "without a propertyless inspector (snapshots "
+                + "\(handSnapshots.count), toolbar sharing "
+                + "\(controller.toolbarWindowForTesting.sharingType.rawValue), "
+                + "inspector sharing "
+                + "\(controller.inspectorWindowForTesting.sharingType.rawValue), "
+                + "levels \(controller.toolbarWindowForTesting.level.rawValue)/"
+                + "\(controller.inspectorWindowForTesting.level.rawValue)/"
+                + "\(parent.level.rawValue), frame "
+                + "\(handSnapshots.first?.globalFrame == controller.toolbarFrameForTesting), "
+                + "parents "
+                + "\(controller.toolbarWindowForTesting.parent === parent)/"
+                + "\(controller.inspectorWindowForTesting.parent === controller.toolbarWindowForTesting))"
+        )
+
+        annotationController.currentTool = .rectangle
+        controller.updateState(
+            DrawingToolbarState(annotationController: annotationController)
+        )
+        let rectangleSnapshots = controller.captureAccessorySnapshots(
+            scaleX: 2,
+            scaleY: 2
+        )
+        try expect(
+            rectangleSnapshots.count == 2
+                && rectangleSnapshots[0].globalFrame
+                    == controller.toolbarFrameForTesting
+                && rectangleSnapshots[1].globalFrame.contains(
+                    controller.inspectorFrameForTesting
+                )
+                && controller.inspectorWindowForTesting.parent
+                    === controller.toolbarWindowForTesting,
+            "Expected ordered toolbar then inspector snapshots only while both "
+                + "stable controls are truly shown"
+        )
+
+        annotationController.currentTool = .eraser
+        controller.updateState(
+            DrawingToolbarState(annotationController: annotationController)
+        )
+        let staleInspectorFrame = controller.inspectorFrameForTesting
+        try expect(
+            staleInspectorFrame.width > 0
+                && controller.captureAccessorySnapshots(
+                    scaleX: 1,
+                    scaleY: 1
+                ).count == 1,
+            "Expected a hidden propertyless inspector to stay excluded despite "
+                + "its stale nonzero frame"
+        )
+
+        controller.hide()
+        try expect(
+            controller.captureAccessorySnapshots(
+                scaleX: 1,
+                scaleY: 1
+            ).isEmpty,
+            "Expected suppressed or hidden stable controls to produce no snapshots"
+        )
+    }
+
+    private static func testZoomCanvasAccessoryCaptureIntegration() throws {
+        let displayFrame = CGRect(x: -120, y: 450, width: 40, height: 30)
+        let baseImage = try makeSolidImage(
+            width: 80,
+            height: 60,
+            color: NSColor(
+                calibratedRed: 0.1,
+                green: 0.35,
+                blue: 0.15,
+                alpha: 1
+            )
+        )
+        let accessoryImage = try makeSolidImage(
+            width: 16,
+            height: 12,
+            color: .magenta
+        )
+        let capturedFrame = CapturedFrame(
+            image: baseImage,
+            display: DisplayDescriptor(
+                id: 77,
+                frame: displayFrame,
+                scaleFactor: 2
+            ),
+            pixelSize: CGSize(width: 80, height: 60),
+            timestamp: Date(timeIntervalSince1970: 0)
+        )
+        let viewportController = ZoomViewportController()
+        viewportController.configure(for: capturedFrame, initialZoom: 1)
+        var controlsVisible = true
+        let accessoryFrame = CGRect(
+            x: displayFrame.minX + 4,
+            y: displayFrame.maxY - 3 - 6,
+            width: 8,
+            height: 6
+        )
+        let canvas = ZoomCanvasView(
+            frame: CGRect(origin: .zero, size: displayFrame.size),
+            capturedFrame: capturedFrame,
+            viewportController: viewportController,
+            annotationController: AnnotationController(),
+            smoothImage: true,
+            userSelectedResourceAccess:
+                UserDefaultsUserSelectedResourceAccess(),
+            commandSink: { _ in },
+            captureCompositor: {
+                baseImage,
+                displayFrame,
+                sourceRegion,
+                outputPixelSize in
+                CaptureAccessoryCompositor.compose(
+                    baseImage: baseImage,
+                    displayFrame: displayFrame,
+                    sourceRegion: sourceRegion,
+                    outputPixelSize: outputPixelSize,
+                    accessories: controlsVisible
+                        ? [
+                            CaptureAccessorySnapshot(
+                                globalFrame: accessoryFrame,
+                                image: accessoryImage
+                            )
+                        ]
+                        : []
+                )
+            }
+        )
+
+        func containsMagenta(_ image: CGImage) -> Bool {
+            let representation = NSBitmapImageRep(cgImage: image)
+            for y in 0..<representation.pixelsHigh {
+                for x in 0..<representation.pixelsWide {
+                    guard let color = representation.colorAt(x: x, y: y)?
+                        .usingColorSpace(.sRGB) else {
+                        continue
+                    }
+                    if color.redComponent > 0.8
+                        && color.blueComponent > 0.8
+                        && color.greenComponent < 0.2 {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        guard let wholeStill = canvas.captureImageForTesting(
+            policy: .stillImage,
+            sourceRect: nil,
+            outputPixelSize: nil
+        ), let fullRecording = canvas.captureImageForTesting(
+            policy: .recording,
+            sourceRect: nil,
+            outputPixelSize: CGSize(width: 83, height: 61)
+        ), let regionRecording = canvas.captureImageForTesting(
+            policy: .recording,
+            sourceRect: CGRect(x: 2, y: 1, width: 12, height: 10),
+            outputPixelSize: CGSize(width: 25, height: 21)
+        ), let regionWithoutControls = canvas.captureImageForTesting(
+            policy: .recording,
+            sourceRect: CGRect(x: 20, y: 15, width: 10, height: 10),
+            outputPixelSize: CGSize(width: 23, height: 19)
+        ) else {
+            throw SelfTestError.failure(
+                "Could not render integrated canvas capture paths"
+            )
+        }
+        try expect(
+            containsMagenta(wholeStill)
+                && fullRecording.width == 83
+                && fullRecording.height == 61
+                && containsMagenta(fullRecording)
+                && regionRecording.width == 25
+                && regionRecording.height == 21
+                && containsMagenta(regionRecording)
+                && regionWithoutControls.width == 23
+                && regionWithoutControls.height == 19
+                && !containsMagenta(regionWithoutControls),
+            "Expected whole Copy/Save and exact full/region recording outputs "
+                + "to include only intersecting visible stable controls"
+        )
+
+        controlsVisible = false
+        guard let suppressedSnip = canvas.captureImageForTesting(
+            policy: .stillImage,
+            sourceRect: CGRect(x: 2, y: 1, width: 12, height: 10),
+            outputPixelSize: CGSize(width: 24, height: 20)
+        ) else {
+            throw SelfTestError.failure(
+                "Could not render suppressed in-overlay snip capture"
+            )
+        }
+        try expect(
+            !containsMagenta(suppressedSnip),
+            "Expected region-selection suppression to omit stable controls from "
+                + "the final snip"
+        )
+    }
+
+    private static func testCaptureFeedbackAndRecordingDimensionPolicies() throws {
+        try expect(
+            OverlayWindowSharingPolicy.sharingType(
+                for: .standardWindow
+            ) == .readWrite
+                && OverlayWindowSharingPolicy.sharingType(
+                    for: .staticOverlay
+                ) == .readOnly
+                && OverlayWindowSharingPolicy.sharingType(
+                    for: .liveOverlay
+                ) == .readOnly
+                && OverlayWindowSharingPolicy.isVisibleToExternalCapture(
+                    context: .standardWindow
+                )
+                && OverlayWindowSharingPolicy.isVisibleToExternalCapture(
+                    context: .staticOverlay
+                )
+                && OverlayWindowSharingPolicy.isVisibleToExternalCapture(
+                    context: .liveOverlay
+                )
+                && LiveCaptureFeedbackPolicy.excludesApplication(
+                processID: 42,
+                ownProcessID: 42
+            )
+                && !LiveCaptureFeedbackPolicy.excludesApplication(
+                    processID: 41,
+                    ownProcessID: 42
+                )
+                && RecordingFrameReplacementPolicy.source(
+                    hasOverlaySnapshot: true
+                ) == .overlaySnapshot
+                && RecordingFrameReplacementPolicy.source(
+                    hasOverlaySnapshot: false
+                ) == .screenStream,
+            "Expected standard, static, and live windows to remain externally "
+                + "capturable, live capture to exclude the whole ZoomIt process, "
+                + "and recording to choose exactly one frame source"
+        )
+
+        let display = DisplayDescriptor(
+            id: 12,
+            frame: CGRect(x: -400, y: 900, width: 100, height: 80),
+            scaleFactor: 2
+        )
+        try expect(
+            RecordingController.outputPixelSize(
+                display: display,
+                sourceRect: nil
+            ) == CGSize(width: 200, height: 160)
+                && RecordingController.outputPixelSize(
+                    display: display,
+                    sourceRect: CGRect(
+                        x: 3.25,
+                        y: 4.5,
+                        width: 12.75,
+                        height: 9.25
+                    )
+                ) == CGSize(width: 25, height: 18),
+            "Expected recording output dimensions to match ScreenCaptureKit's "
+                + "full and fractional region pixel sizes exactly"
+        )
+    }
+
     private static func testAnnotationSloppinessDeterminismAndEndpoints() throws {
         guard let uuid = UUID(uuidString: "2F3D3E7A-18A7-4F65-9E50-5B17C2AA0031") else {
             throw SelfTestError.failure("Could not create deterministic sloppiness test UUID")
@@ -17952,6 +19075,19 @@ public enum SelfTestRunner {
         return result
     }
 
+    private static func frame(
+        _ view: NSView,
+        convertedTo ancestor: NSView
+    ) -> CGRect {
+        guard let superview = view.superview else {
+            return view.frame
+        }
+        let localFrame = view is NSTextField
+            ? view.alignmentRect(forFrame: view.frame)
+            : view.frame
+        return superview.convert(localFrame, to: ancestor)
+    }
+
     private static func dispatchPhysicalClick(on button: NSButton) throws {
         try dispatchPhysicalClick(in: button)
     }
@@ -17960,6 +19096,30 @@ public enum SelfTestRunner {
         let events = try physicalClickEvents(in: view)
         NSApp.postEvent(events.mouseUp, atStart: true)
         NSApp.sendEvent(events.mouseDown)
+    }
+
+    private static func dispatchPhysicalMouseClick(in view: NSView) throws {
+        let events = try physicalClickEvents(in: view)
+        NSApp.postEvent(events.mouseUp, atStart: true)
+        NSApp.postEvent(events.mouseDown, atStart: true)
+        var dispatchedTypes: [NSEvent.EventType] = []
+        while let event = NSApp.nextEvent(
+            matching: [.leftMouseDown, .leftMouseUp],
+            until: Date().addingTimeInterval(0.1),
+            inMode: .default,
+            dequeue: true
+        ) {
+            dispatchedTypes.append(event.type)
+            NSApp.sendEvent(event)
+            if event.type == .leftMouseUp {
+                break
+            }
+        }
+        guard dispatchedTypes == [.leftMouseDown, .leftMouseUp] else {
+            throw SelfTestError.failure(
+                "Expected one queued physical mouse-down/up pair, got \(dispatchedTypes)"
+            )
+        }
     }
 
     private static func physicalClickEvents(
@@ -18034,6 +19194,33 @@ public enum SelfTestRunner {
             pixelSize: CGSize(width: image.width, height: image.height),
             timestamp: Date(timeIntervalSince1970: 0)
         )
+    }
+
+    private static func makeSolidImage(
+        width: Int,
+        height: Int,
+        color: NSColor
+    ) throws -> CGImage {
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue
+                | CGImageAlphaInfo.premultipliedFirst.rawValue
+        ) else {
+            throw SelfTestError.failure("Could not create solid test image")
+        }
+        context.setFillColor(color.cgColor)
+        context.fill(
+            CGRect(x: 0, y: 0, width: width, height: height)
+        )
+        guard let image = context.makeImage() else {
+            throw SelfTestError.failure("Could not finalize solid test image")
+        }
+        return image
     }
 
     private struct RenderPixel: Equatable {
@@ -18700,6 +19887,21 @@ public enum SelfTestRunner {
         approximatelyEqual(lhs.origin, rhs.origin, tolerance: tolerance)
             && abs(lhs.width - rhs.width) <= tolerance
             && abs(lhs.height - rhs.height) <= tolerance
+    }
+
+    private static func colorsMatch(
+        _ lhs: NSColor,
+        _ rhs: NSColor,
+        tolerance: CGFloat = 0.001
+    ) -> Bool {
+        guard let left = lhs.usingColorSpace(.sRGB),
+              let right = rhs.usingColorSpace(.sRGB) else {
+            return lhs.isEqual(rhs)
+        }
+        return abs(left.redComponent - right.redComponent) <= tolerance
+            && abs(left.greenComponent - right.greenComponent) <= tolerance
+            && abs(left.blueComponent - right.blueComponent) <= tolerance
+            && abs(left.alphaComponent - right.alphaComponent) <= tolerance
     }
 
     private static func expect(_ condition: Bool, _ message: String) throws {

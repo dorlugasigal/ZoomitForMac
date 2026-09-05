@@ -9,6 +9,15 @@ struct SendableCGImage: @unchecked Sendable {
     let image: CGImage
 }
 
+enum LiveCaptureFeedbackPolicy {
+    static func excludesApplication(
+        processID: pid_t,
+        ownProcessID: pid_t
+    ) -> Bool {
+        processID == ownProcessID
+    }
+}
+
 /// Streams a live, continuously updating image of a display via ScreenCaptureKit.
 ///
 /// macOS has no public third-party magnification API equivalent to Windows'
@@ -42,7 +51,10 @@ final class LiveCaptureSession: NSObject, SCStreamOutput, @unchecked Sendable {
         }
 
         let ownApplications = content.applications.filter {
-            $0.processID == ProcessInfo.processInfo.processIdentifier
+            LiveCaptureFeedbackPolicy.excludesApplication(
+                processID: $0.processID,
+                ownProcessID: ProcessInfo.processInfo.processIdentifier
+            )
         }
         let filter = SCContentFilter(
             display: captureDisplay,

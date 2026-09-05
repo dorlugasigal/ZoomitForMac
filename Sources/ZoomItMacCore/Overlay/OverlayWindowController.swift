@@ -5,6 +5,31 @@ private final class OverlayWindow: NSWindow {
     override var canBecomeMain: Bool { true }
 }
 
+enum OverlayWindowSharingContext {
+    case standardWindow
+    case staticOverlay
+    case liveOverlay
+}
+
+enum OverlayWindowSharingPolicy {
+    static func sharingType(
+        for context: OverlayWindowSharingContext
+    ) -> NSWindow.SharingType {
+        switch context {
+        case .standardWindow:
+            .readWrite
+        case .staticOverlay, .liveOverlay:
+            .readOnly
+        }
+    }
+
+    static func isVisibleToExternalCapture(
+        context: OverlayWindowSharingContext
+    ) -> Bool {
+        sharingType(for: context) != .none
+    }
+}
+
 @MainActor
 final class OverlayWindowController {
     private let userSelectedResourceAccess: UserSelectedResourceAccess
@@ -17,6 +42,7 @@ final class OverlayWindowController {
     private var drawingAccessorySuppressions = DrawingAccessorySuppressionLifecycle()
     private var canvasModalSuppression: DrawingAccessorySuppressionToken?
     private var viewportController: ZoomViewportController?
+    private var overlayDisplayID: CGDirectDisplayID?
     private var zoomTimer: Timer?
     private var zoomAnimationCompletion: (() -> Void)?
 
@@ -54,17 +80,13 @@ final class OverlayWindowController {
         window.isOpaque = true
         window.acceptsMouseMovedEvents = true
         window.isReleasedWhenClosed = false
-        if excludeFromScreenCapture {
-            // Live zoom captures the screen live and displays it in this overlay.
-            // Marking the window as non-shareable keeps ScreenCaptureKit from
-            // capturing the overlay back into itself, which would otherwise feed
-            // the magnified output into the next frame and zoom in infinitely.
-            window.sharingType = .none
-        } else {
-            // Static zoom and draw-only overlays must be visible to the recorder
-            // so annotations made during screen recording are captured.
-            window.sharingType = .readOnly
-        }
+        let sharingContext: OverlayWindowSharingContext =
+            excludeFromScreenCapture ? .liveOverlay : .staticOverlay
+        // Live capture excludes the whole ZoomIt process, so the overlay can
+        // remain externally shareable without feeding back into its own stream.
+        window.sharingType = OverlayWindowSharingPolicy.sharingType(
+            for: sharingContext
+        )
 
         let canvasView = ZoomCanvasView(
             frame: CGRect(origin: .zero, size: capturedFrame.display.frame.size),
@@ -82,6 +104,20 @@ final class OverlayWindowController {
             },
             modalPresentationDidChange: { [weak self] isPresenting in
                 self?.setToolbarSuppressed(isPresenting)
+            },
+            captureCompositor: { [weak self] baseImage, displayFrame, sourceRegion, outputPixelSize in
+                self?.composeDrawingAccessories(
+                    over: baseImage,
+                    displayFrame: displayFrame,
+                    sourceRegion: sourceRegion,
+                    outputPixelSize: outputPixelSize
+                ) ?? CaptureAccessoryCompositor.compose(
+                    baseImage: baseImage,
+                    displayFrame: displayFrame,
+                    sourceRegion: sourceRegion,
+                    outputPixelSize: outputPixelSize,
+                    accessories: []
+                )
             }
         )
         window.contentView = canvasView
@@ -95,6 +131,7 @@ final class OverlayWindowController {
         self.annotationController = annotationController
         self.window = window
         self.viewportController = viewportController
+        overlayDisplayID = capturedFrame.display.id
 
         drawingToolbarController = DrawingToolbarController(
             parentWindow: window,
@@ -242,8 +279,16 @@ final class OverlayWindowController {
 
     /// Renders the overlay exactly as ZoomIt shows it so the recorder can encode
     /// zoom/drawing even when ScreenCaptureKit omits our own windows.
-    func captureFrameForRecording(sourceRect: CGRect?) -> CGImage? {
-        canvasView?.captureRecordingImage(sourceRect: sourceRect)
+    func captureFrameForRecording(
+        displayID: CGDirectDisplayID,
+        sourceRect: CGRect?,
+        outputPixelSize: CGSize
+    ) -> CGImage? {
+        guard overlayDisplayID == displayID else { return nil }
+        return canvasView?.captureRecordingImage(
+            sourceRect: sourceRect,
+            outputPixelSize: outputPixelSize
+        )
     }
 
     func requestRedraw() {
@@ -280,6 +325,7 @@ final class OverlayWindowController {
         canvasView = nil
         annotationController = nil
         viewportController = nil
+        overlayDisplayID = nil
         self.window = nil
 
         // Defer the final close so the window and its content view are not
@@ -328,5 +374,26 @@ final class OverlayWindowController {
         } else {
             drawingToolbarController?.hide()
         }
+    }
+
+    private func composeDrawingAccessories(
+        over baseImage: CGImage,
+        displayFrame: CGRect,
+        sourceRegion: CGRect,
+        outputPixelSize: CGSize
+    ) -> CGImage? {
+        let scaleX = outputPixelSize.width / sourceRegion.width
+        let scaleY = outputPixelSize.height / sourceRegion.height
+        let snapshots = drawingToolbarController?.captureAccessorySnapshots(
+            scaleX: scaleX,
+            scaleY: scaleY
+        ) ?? []
+        return CaptureAccessoryCompositor.compose(
+            baseImage: baseImage,
+            displayFrame: displayFrame,
+            sourceRegion: sourceRegion,
+            outputPixelSize: outputPixelSize,
+            accessories: snapshots
+        )
     }
 }

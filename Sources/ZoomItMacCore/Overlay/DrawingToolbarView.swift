@@ -7,7 +7,7 @@ struct DrawingToolbarShadowMetric: Equatable {
 }
 
 enum DrawingToolbarVisualMetrics {
-    static let desktopWidth: CGFloat = 698
+    static let desktopWidth: CGFloat = 648
     static let shellHeight: CGFloat = 54
     static let shellInset: CGFloat = 5
     static let shellCornerRadius: CGFloat = 15
@@ -70,9 +70,7 @@ final class DrawingToolbarView: NSVisualEffectView {
     private var toolButtons: [AnnotationTool: DrawingToolbarButton] = [:]
     private let finishPathButton: DrawingToolbarButton
     private let cancelPathButton: DrawingToolbarButton
-    private let keepActiveButton: DrawingToolbarButton
     private var shellShadowLayers: [CALayer] = []
-    private var keepsToolActiveForPresentation = true
     private var trackingAreaReference: NSTrackingArea?
     private var isConstructingLinearPath = false
     private var shouldResetScrollPosition = true
@@ -96,10 +94,6 @@ final class DrawingToolbarView: NSVisualEffectView {
             symbolName: "xmark.circle",
             label: "Cancel Path",
             keyboardHint: "Escape"
-        )
-        keepActiveButton = DrawingToolbarButton(
-            symbolName: "lock.fill",
-            label: "Keep Drawing Tool Active"
         )
         dragHandle = DrawingToolbarDragHandleView(
             beginDragging: beginDragging
@@ -136,14 +130,7 @@ final class DrawingToolbarView: NSVisualEffectView {
         pathActionsStack.isHidden = true
         addSubview(pathActionsStack)
 
-        keepActiveButton.handler = { [weak self] in
-            guard let self else { return }
-            commandSink(
-                .setKeepToolActive(!keepsToolActiveForPresentation)
-            )
-        }
         stack.addArrangedSubview(dragHandle)
-        stack.addArrangedSubview(keepActiveButton)
         addSeparator()
 
         addToolButton(.hand, symbol: "hand.draw", label: "Hand")
@@ -318,22 +305,6 @@ final class DrawingToolbarView: NSVisualEffectView {
     ) {
         let displayedTool = transientTool ?? state.currentTool
         selectDisplayedTool(displayedTool)
-        keepsToolActiveForPresentation = state.keepsToolActive
-        keepActiveButton.isSelected = false
-        keepActiveButton.setSymbol(
-            state.keepsToolActive ? "lock.fill" : "lock.open",
-            accessibilityDescription: state.keepsToolActive
-                ? "Keep Drawing Tool Active"
-                : "Use Drawing Tool Once"
-        )
-        keepActiveButton.setAccessibilityLabel(
-            state.keepsToolActive
-                ? "Keep Drawing Tool Active"
-                : "Use Drawing Tool Once"
-        )
-        keepActiveButton.toolTip = state.keepsToolActive
-            ? "Drawing tools remain active after use"
-            : "Drawing tools return to Select after one use"
         isConstructingLinearPath = state.isConstructingLinearPath
         finishPathButton.isEnabled = state.canFinishLinearPath
         pathActionsStack.isHidden = !state.isConstructingLinearPath
@@ -351,16 +322,12 @@ final class DrawingToolbarView: NSVisualEffectView {
     }
 
     var buttonFramesForTesting: [String: CGRect] {
-        var frames = toolButtons.reduce(into: [String: CGRect]()) {
+        let frames = toolButtons.reduce(into: [String: CGRect]()) {
             $0[String(describing: $1.key)] = CGRect(
                 origin: $1.value.convert(.zero, to: self),
                 size: $1.value.frame.size
             )
         }
-        frames["keepActive"] = CGRect(
-            origin: keepActiveButton.convert(.zero, to: self),
-            size: keepActiveButton.frame.size
-        )
         return frames
     }
 

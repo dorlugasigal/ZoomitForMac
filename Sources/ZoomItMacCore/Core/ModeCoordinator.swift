@@ -557,9 +557,6 @@ final class ModeCoordinator {
             annotationController.setSmartDrawEnabled(isEnabled)
             persistSmartDrawEnabled(isEnabled)
             overlayController.requestRedraw()
-        case .setKeepToolActive(let keepsActive):
-            annotationController.setKeepsToolActive(keepsActive)
-            overlayController.requestRedraw()
         case .setRoundness(let roundness):
             annotationController.setRoundness(roundness)
             overlayController.requestRedraw()
@@ -649,9 +646,7 @@ final class ModeCoordinator {
             annotationController.unbindLinearEndpoints()
             overlayController.requestRedraw()
         case .finishLinearPath:
-            if annotationController.finishLinearConstruction(commitPreview: true) {
-                annotationController.completeToolUseIfNeeded()
-            }
+            _ = annotationController.finishLinearConstruction(commitPreview: true)
             overlayController.requestRedraw()
         case .cancelLinearPath:
             annotationController.cancelLinearConstruction()
@@ -1340,8 +1335,13 @@ final class ModeCoordinator {
 
         // Make sure the Save dialog (shown after stopping) isn't hidden behind a
         // zoom overlay by dismissing any active overlay first.
-        recordingController.overlayFrameProvider = { [weak self] sourceRect in
-            self?.overlayController.captureFrameForRecording(sourceRect: sourceRect)
+        recordingController.overlayFrameProvider = {
+            [weak self] displayID, sourceRect, outputPixelSize in
+            self?.overlayController.captureFrameForRecording(
+                displayID: displayID,
+                sourceRect: sourceRect,
+                outputPixelSize: outputPixelSize
+            )
         }
         recordingController.onWillShowSaveDialog = { [weak self] in
             guard let self else { return }

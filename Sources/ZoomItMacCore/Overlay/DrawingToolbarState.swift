@@ -37,7 +37,6 @@ enum DrawingToolShortcuts {
     }
 
     enum DrawingToolbarGroup: Equatable {
-        case keepActive
         case hand
         case mainTools
         case overflow
@@ -45,7 +44,6 @@ enum DrawingToolShortcuts {
 
     enum DrawingToolbarStructure {
         static let orderedGroups: [DrawingToolbarGroup] = [
-            .keepActive,
             .hand,
             .mainTools,
             .overflow
@@ -292,7 +290,7 @@ enum DrawingInspectorControlMapping {
     }
 }
 
-enum DrawingInspectorSection: CaseIterable, Equatable {
+enum DrawingInspectorSection: CaseIterable, Hashable {
     case strokeColor
     case background
     case fill
@@ -426,6 +424,7 @@ enum DrawingInspectorSectionMatrix {
 
     struct DrawingToolbarHorizontalSectionLayout: Equatable {
         var rows: [[DrawingInspectorSection]]
+        var rowWidths: [CGFloat]
         var documentWidth: CGFloat
     }
 
@@ -448,51 +447,54 @@ enum DrawingInspectorSectionMatrix {
 
         static func layout(
             sections: [DrawingInspectorSection],
-            availableWidth: CGFloat
+            availableWidth: CGFloat,
+            sectionWidths: [DrawingInspectorSection: CGFloat] = [:]
         ) -> DrawingToolbarHorizontalSectionLayout {
             guard !sections.isEmpty else {
                 return DrawingToolbarHorizontalSectionLayout(
                     rows: [],
-                    documentWidth: max(1, availableWidth)
+                    rowWidths: [],
+                    documentWidth: 1
                 )
             }
 
-            let naturalWidth = totalWidth(sections)
-            let viewportWidth = max(
-                sectionWidth(sections[0]),
-                min(max(1, availableWidth), naturalWidth)
-            )
-            var documentWidth = viewportWidth
-            var rows = packedRows(sections: sections, width: documentWidth)
-            if rows.count > 2 {
-                var lowerBound = viewportWidth
-                var upperBound = naturalWidth
-                while upperBound - lowerBound > 0.5 {
-                    let candidate = (lowerBound + upperBound) / 2
-                    if packedRows(sections: sections, width: candidate).count <= 2 {
-                        upperBound = candidate
-                    } else {
-                        lowerBound = candidate
-                    }
+            let safeWidth = max(1, availableWidth)
+            let resolvedWidths = Dictionary(
+                uniqueKeysWithValues: sections.map {
+                    (
+                        $0,
+                        min(
+                            max(1, sectionWidths[$0] ?? sectionWidth($0)),
+                            safeWidth
+                        )
+                    )
                 }
-                documentWidth = ceil(upperBound)
-                rows = packedRows(sections: sections, width: documentWidth)
+            )
+            let rows = packedRows(
+                sections: sections,
+                width: safeWidth,
+                sectionWidths: resolvedWidths
+            )
+            let rowWidths = rows.map {
+                totalWidth($0, sectionWidths: resolvedWidths)
             }
 
             return DrawingToolbarHorizontalSectionLayout(
-                rows: Array(rows.prefix(2)),
-                documentWidth: documentWidth
+                rows: rows,
+                rowWidths: rowWidths,
+                documentWidth: min(safeWidth, ceil(rowWidths.max() ?? 1))
             )
         }
 
         private static func packedRows(
             sections: [DrawingInspectorSection],
-            width: CGFloat
+            width: CGFloat,
+            sectionWidths: [DrawingInspectorSection: CGFloat]
         ) -> [[DrawingInspectorSection]] {
             var rows: [[DrawingInspectorSection]] = [[]]
             var rowWidth = CGFloat.zero
             for section in sections {
-                let itemWidth = sectionWidth(section)
+                let itemWidth = sectionWidths[section] ?? sectionWidth(section)
                 let proposed = rows[rows.count - 1].isEmpty
                     ? itemWidth
                     : rowWidth
@@ -510,9 +512,12 @@ enum DrawingInspectorSectionMatrix {
         }
 
         private static func totalWidth(
-            _ sections: [DrawingInspectorSection]
+            _ sections: [DrawingInspectorSection],
+            sectionWidths: [DrawingInspectorSection: CGFloat]
         ) -> CGFloat {
-            sections.reduce(CGFloat.zero) { $0 + sectionWidth($1) }
+            sections.reduce(CGFloat.zero) {
+                $0 + (sectionWidths[$1] ?? sectionWidth($1))
+            }
                 + CGFloat(max(0, sections.count - 1))
                     * DrawingInspectorVisualMetrics.attachedSectionSpacing
         }
@@ -612,7 +617,6 @@ struct DrawingToolbarState {
     var preferredVariablePressureMode: AnnotationPressureMode
     var smoothingEnabled: DrawingToolbarValue<Bool>
     var smartDrawEnabled: Bool
-    var keepsToolActive: Bool
     var smartDrawStatusText: String?
     var roundness: DrawingToolbarValue<CGFloat?>
     var edgeStyle: DrawingToolbarValue<AnnotationEdgeStyle>
@@ -906,7 +910,6 @@ struct DrawingToolbarState {
             ? (selected.isEmpty ? .value(annotationController.currentStyle.smoothingEnabled) : .unavailable)
             : .resolve(freehands.map(\.style.smoothingEnabled))
         smartDrawEnabled = annotationController.smartDrawEnabled
-        keepsToolActive = annotationController.keepsToolActive
         smartDrawStatusText = annotationController.smartDrawStatusText
         roundness = roundedShapes.isEmpty
             ? (selected.isEmpty ? .value(annotationController.currentStyle.roundness) : .unavailable)

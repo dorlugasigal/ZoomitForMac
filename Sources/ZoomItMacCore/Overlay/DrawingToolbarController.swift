@@ -117,6 +117,62 @@ final class DrawingToolbarController: NSObject {
         inspectorView.hasChromeForTesting
     }
 
+    var inspectorHasHorizontalScrollerForTesting: Bool {
+        inspectorView.hasHorizontalScrollerForTesting
+    }
+
+    var inspectorDocumentSizeForTesting: CGSize {
+        inspectorView.documentSizeForTesting
+    }
+
+    var inspectorViewportSizeForTesting: CGSize {
+        inspectorView.viewportSizeForTesting
+    }
+
+    var propertiesFittingHeightForTesting: CGFloat {
+        ceil(propertiesController.view.fittingSize.height)
+    }
+
+    func captureAccessorySnapshots(
+        scaleX: CGFloat,
+        scaleY: CGFloat
+    ) -> [CaptureAccessorySnapshot] {
+        guard isPanelVisible,
+              toolbarPanel.isVisible,
+              toolbarPanel.frame.width > 0,
+              toolbarPanel.frame.height > 0,
+              let toolbarContentView = toolbarPanel.contentView else {
+            return []
+        }
+
+        var snapshots: [CaptureAccessorySnapshot] = []
+        if let toolbarSnapshot = CaptureAccessorySnapshotRenderer.snapshot(
+            view: toolbarContentView,
+            globalFrame: toolbarPanel.frame,
+            scaleX: scaleX,
+            scaleY: scaleY
+        ) {
+            snapshots.append(toolbarSnapshot)
+        }
+
+        if currentState.hasInspectorContent,
+           isInspectorOrderedVisible,
+           inspectorPanel.isVisible,
+           inspectorPanel.frame.width > 0,
+           inspectorPanel.frame.height > 0,
+           let inspectorContentView = inspectorPanel.contentView,
+           let inspectorSnapshot = CaptureAccessorySnapshotRenderer.snapshot(
+               view: inspectorContentView,
+               globalFrame: inspectorPanel.frame,
+               scaleX: scaleX,
+               scaleY: scaleY,
+               shadow: .inspector
+           ) {
+            snapshots.append(inspectorSnapshot)
+        }
+        return snapshots
+    }
+
     func applyDragSampleForTesting(
         proposedOrigin: CGPoint,
         visibleFrame: CGRect
@@ -340,9 +396,11 @@ final class DrawingToolbarController: NSObject {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.acceptsMouseMovedEvents = true
+        panel.minSize = .zero
+        panel.contentMinSize = .zero
         panel.level = NSWindow.Level(rawValue: parentWindow.level.rawValue + 1)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.sharingType = .none
+        panel.sharingType = .readOnly
         parentWindow.addChildWindow(panel, ordered: .above)
     }
 
