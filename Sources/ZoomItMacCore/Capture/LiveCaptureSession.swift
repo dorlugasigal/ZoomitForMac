@@ -40,6 +40,7 @@ final class LiveCaptureSession: NSObject, SCStreamOutput, @unchecked Sendable {
 
     @MainActor
     func start(display: DisplayDescriptor) async throws {
+        stopRequested = false
         let content = try await SCShareableContent.excludingDesktopWindows(
             false,
             onScreenWindowsOnly: true

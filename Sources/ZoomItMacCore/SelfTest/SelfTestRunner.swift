@@ -6780,6 +6780,21 @@ public enum SelfTestRunner {
                 ) == .zero,
             "Expected attached inspector documents to stay pinned to the viewport origin"
         )
+        try expect(
+            DrawingInspectorDocumentLayout.clampedScrollOrigin(
+                CGPoint(x: 40, y: 900),
+                documentSize: CGSize(width: 208, height: 600),
+                viewportSize: CGSize(width: 208, height: 200),
+                resetsToOrigin: false
+            ) == CGPoint(x: 0, y: 400)
+                && DrawingInspectorDocumentLayout.clampedScrollOrigin(
+                    CGPoint(x: 0, y: -20),
+                    documentSize: CGSize(width: 208, height: 600),
+                    viewportSize: CGSize(width: 208, height: 200),
+                    resetsToOrigin: false
+                ) == .zero,
+            "Expected vertical inspector scrolling to clamp within the document"
+        )
 
         let inspector = DrawingPropertiesController(
             commandSink: { _ in },

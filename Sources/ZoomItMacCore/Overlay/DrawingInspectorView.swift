@@ -167,11 +167,14 @@ enum DrawingInspectorDocumentLayout {
         viewportSize: CGSize,
         resetsToOrigin: Bool
     ) -> CGPoint {
-        _ = origin
-        _ = documentSize
-        _ = viewportSize
-        _ = resetsToOrigin
-        return .zero
+        guard !resetsToOrigin else { return .zero }
+        return CGPoint(
+            x: 0,
+            y: min(
+                max(0, origin.y),
+                max(0, documentSize.height - viewportSize.height)
+            )
+        )
     }
 }
 
